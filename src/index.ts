@@ -15,7 +15,15 @@ import { resolveNetwork } from '#network.ts'
 import { services, servicesArgs, servicesOptions } from '#services.ts'
 import { init, login, initOptions, logout, refresh, logoutOptions, loginOptions } from '#auth.ts'
 import { envSchema, globalOptionsSchema, type GlobalOptions } from '#output.ts'
-import { keys, transfer, transferArgs, transferOptions, whoami } from '#wallet.ts'
+import {
+  createKey,
+  keyCreateOptions,
+  keys,
+  transfer,
+  transferArgs,
+  transferOptions,
+  whoami
+} from '#wallet.ts'
 
 const commandOutput = z.unknown()
 
@@ -75,7 +83,12 @@ cli.command('whoami', {
   }
 })
 
-cli.command('keys', {
+const keysCli = Cli.create('keys', {
+  description: 'List and manage local wallet keys',
+  outputPolicy: 'agent-only'
+})
+
+keysCli.command('list', {
   description: 'List keys and their spending limits',
   output: commandOutput,
   async run(c) {
@@ -83,6 +96,18 @@ cli.command('keys', {
     return await keys(resolveNetwork(globals.network), globals)
   }
 })
+
+keysCli.command('create', {
+  description: 'Create a revocable local access key from the local root wallet',
+  options: keyCreateOptions,
+  output: commandOutput,
+  async run(c) {
+    const globals = getGlobals(c)
+    return await createKey(resolveNetwork(globals.network), globals)
+  }
+})
+
+cli.command(keysCli)
 
 cli.command('transfer', {
   description: 'Transfer tokens to an address',
@@ -174,7 +199,7 @@ cli.command('debug', {
 
 const globals = parseGlobalOptions(process.argv.slice(2))
 
-await cli.serve(globals.argv)
+await cli.serve(normalizeCommandArgs(globals.argv))
 
 export default cli
 
@@ -246,6 +271,18 @@ function parseGlobalOptions(argv: string[]) {
   }
 
   return { argv: normalizeHelp(normalizeCommandDefaults(next)), options }
+}
+
+function normalizeCommandArgs(argv: string[]) {
+  const normalized: string[] = []
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!
+    normalized.push(token)
+    if (token !== 'keys') continue
+    const next = argv[index + 1]
+    if (!next || (next.startsWith('-') && next !== '--help')) normalized.push('list')
+  }
+  return normalized
 }
 
 function normalizeCommandDefaults(argv: string[]) {

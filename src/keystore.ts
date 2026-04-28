@@ -76,7 +76,14 @@ export function hasKeyForNetwork(keys: readonly KeyEntry[], chainId: number) {
 }
 
 export function keyForNetwork(keys: readonly KeyEntry[], chainId: number) {
-  return keys.find(key => key.chainId === chainId) ?? keys.find(isDirectEoaKey)
+  const networkKeys = keys.filter(key => key.chainId === chainId)
+  return (
+    networkKeys.find(key => key.walletType === 'passkey') ??
+    networkKeys.find(isAccessKey) ??
+    networkKeys.find(isDirectEoaKey) ??
+    networkKeys.find(key => key.key || key.keyReference || key.keyStorage === 'secure-enclave') ??
+    keys.find(isDirectEoaKey)
+  )
 }
 
 export function findPasskeyWallet(keys: readonly KeyEntry[]) {
@@ -125,10 +132,20 @@ function normalizeAddressInput(value: string) {
 function primaryKey(keys: readonly KeyEntry[]) {
   return (
     keys.find(key => key.walletType === 'passkey') ??
+    keys.find(isAccessKey) ??
     keys.find(key => key.key && key.key.length > 0) ??
     keys.find(key => key.keyReference) ??
     keys.find(key => key.keyStorage === 'secure-enclave') ??
     keys[0]
+  )
+}
+
+function isAccessKey(key: KeyEntry) {
+  const wallet = normalizeMaybeAddress(key.walletAddress)
+  const signer = normalizeMaybeAddress(key.keyAddress)
+  return (
+    Boolean(wallet && signer && wallet !== signer && key.keyAuthorization) &&
+    Boolean(key.key || key.keyReference)
   )
 }
 

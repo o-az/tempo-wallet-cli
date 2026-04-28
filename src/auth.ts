@@ -9,6 +9,8 @@ import { Account } from 'viem/tempo'
 import {
   createSecureEnclaveIdentity,
   keychainReference,
+  platformHardwareStorage,
+  platformSecretStorage,
   storeKeychainSecret
 } from '#key-storage.ts'
 import {
@@ -50,6 +52,13 @@ export const logoutOptions = z.object({
 type InitOptions = z.infer<typeof initOptions>
 type LoginOptions = z.infer<typeof loginOptions>
 type LogoutOptions = z.infer<typeof logoutOptions>
+type InitResult = {
+  entry: KeyEntry
+  hardwareEncryptionProvider?: string | undefined
+  hardwareEncryptionStatus?: string | undefined
+  secretStorageProvider: string
+  secretStorageStatus: string
+}
 
 export async function login(network: Network, globals: GlobalOptions, options: LoginOptions) {
   return await loginImpl(network, globals, { forceReauth: false, noBrowser: options.noBrowser })
@@ -63,9 +72,10 @@ export async function init(network: Network, globals: GlobalOptions, options: In
       `A wallet already exists for '${network.name}'. Use --force to replace it or run 'tempo wallet whoami'.`
     )
 
-  const entry = options.hardwareEncryption
+  const result = options.hardwareEncryption
     ? await createHardwareRootEntry(network)
     : await createExportableRootEntry(network)
+  const entry = result.entry
   const walletAddress = normalizeAddress(entry.walletAddress)
   const storage = entry.keyStorage ?? 'file'
 
@@ -77,9 +87,19 @@ export async function init(network: Network, globals: GlobalOptions, options: In
     key_address: walletAddress,
     ...(entry.keyStorageHash ? { key_storage_hash: entry.keyStorageHash } : {}),
     ...(entry.keyStorageLabel ? { key_storage_label: entry.keyStorageLabel } : {}),
+    ...(result.hardwareEncryptionProvider
+      ? { hardware_encryption_provider: result.hardwareEncryptionProvider }
+      : {}),
+    ...(result.hardwareEncryptionStatus
+      ? { hardware_encryption_status: result.hardwareEncryptionStatus }
+      : {}),
     network: network.name,
+    secret_storage_provider: result.secretStorageProvider,
+    secret_storage_status: result.secretStorageStatus,
     storage,
-    sync: storageSync(storage),
+    sync: result.hardwareEncryptionStatus
+      ? hardwareSync(result.hardwareEncryptionStatus)
+      : storageSync(storage),
     wallet: walletAddress,
     wallet_type: 'local'
   }
@@ -94,17 +114,33 @@ export async function init(network: Network, globals: GlobalOptions, options: In
   process.stdout.write(`Wallet: ${walletAddress}\n`)
   process.stdout.write(`Network: ${network.name}\n`)
   process.stdout.write(`Storage: ${storage}\n`)
+  process.stdout.write(
+    `Secret storage: ${result.secretStorageProvider} (${result.secretStorageStatus})\n`
+  )
+  if (result.hardwareEncryptionProvider)
+    process.stdout.write(
+      `Hardware encryption: ${result.hardwareEncryptionProvider} (${result.hardwareEncryptionStatus})\n`
+    )
   if (entry.keyStorage === 'secure-enclave') {
     process.stdout.write('Exportable: no\n')
     process.stdout.write('Sync: device_only\n')
     process.stdout.write(`Secure Enclave label: ${entry.keyStorageLabel}\n`)
     process.stdout.write(
       '\nThis root key is non-exportable and can only sign on this device.\n' +
-        'For CLI automation, create a revocable local access key after this manual test path is wired.\n'
+        "For CLI automation, run 'tempo wallet keys create' to create a revocable local access key.\n"
+    )
+  } else if (result.hardwareEncryptionStatus === 'unsupported_noop') {
+    process.stdout.write(
+      '\nHardware-backed non-exportable roots are not implemented on this OS yet.\n' +
+        'Created an exportable local root using the current fallback storage path.\n'
     )
   }
   process.stdout.write(`Keys: ${keysPath()}\n`)
   return undefined
+}
+
+function hardwareSync(status: string) {
+  return status === 'active' ? 'device_only' : 'local_file'
 }
 
 function storageSync(storage: string) {
@@ -113,39 +149,60 @@ function storageSync(storage: string) {
   return 'local_file'
 }
 
-async function createExportableRootEntry(network: Network): Promise<KeyEntry> {
+async function createExportableRootEntry(network: Network): Promise<InitResult> {
+  const secretStorage = platformSecretStorage()
   const privateKey = generatePrivateKey()
   const account = Account.fromSecp256k1(privateKey)
   const walletAddress = normalizeAddress(account.address)
   const reference = keychainReference(network.chainId, walletAddress)
   const storedInKeychain = await storeKeychainSecret(reference, privateKey)
   return {
-    chainId: network.chainId,
-    ...(storedInKeychain
-      ? { keyReference: reference, keyStorage: 'keychain' }
-      : { key: privateKey }),
-    keyAddress: walletAddress,
-    keyType: 'secp256k1',
-    limits: [],
-    walletAddress,
-    walletType: 'local'
+    entry: {
+      chainId: network.chainId,
+      ...(storedInKeychain
+        ? { keyReference: reference, keyStorage: 'keychain' }
+        : { key: privateKey }),
+      keyAddress: walletAddress,
+      keyType: 'secp256k1',
+      limits: [],
+      walletAddress,
+      walletType: 'local'
+    },
+    secretStorageProvider: secretStorage.provider,
+    secretStorageStatus: storedInKeychain ? secretStorage.status : 'unsupported_noop'
   }
 }
 
-async function createHardwareRootEntry(network: Network): Promise<KeyEntry> {
+async function createHardwareRootEntry(network: Network): Promise<InitResult> {
+  const hardwareStorage = platformHardwareStorage()
+  if (hardwareStorage.status !== 'active') {
+    const result = await createExportableRootEntry(network)
+    return {
+      ...result,
+      hardwareEncryptionProvider: hardwareStorage.provider,
+      hardwareEncryptionStatus: hardwareStorage.status
+    }
+  }
+
   const label = `tempo_wallet_${network.name}_${Date.now()}_p256_ne`
   const identity = await createSecureEnclaveIdentity(label)
   const walletAddress = normalizeAddress(identity.address)
   return {
-    chainId: network.chainId,
-    keyAddress: walletAddress,
-    keyStorage: 'secure-enclave',
-    keyStorageHash: identity.hash,
-    keyStorageLabel: identity.label,
-    keyType: 'p256',
-    limits: [],
-    walletAddress,
-    walletType: 'local'
+    entry: {
+      chainId: network.chainId,
+      keyAddress: walletAddress,
+      keyStorage: 'secure-enclave',
+      keyStorageHash: identity.hash,
+      keyStorageLabel: identity.label,
+      keyType: 'p256',
+      limits: [],
+      walletAddress,
+      walletType: 'local'
+    },
+    hardwareEncryptionProvider: hardwareStorage.provider,
+    hardwareEncryptionStatus: hardwareStorage.status,
+    secretStorageProvider: platformSecretStorage().provider,
+    secretStorageStatus: 'not_used'
   }
 }
 

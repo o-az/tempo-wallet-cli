@@ -1,20 +1,22 @@
 import { z } from 'incur'
-import type { Address, Hex } from 'ox'
-import { KeyAuthorization } from 'ox/tempo'
+import { PublicKey, type Address, type Hex } from 'ox'
+import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { tempo, tempoModerato } from 'viem/chains'
 import { Account, Actions, Abis } from 'viem/tempo'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
+import { generatePrivateKey } from 'viem/accounts'
 
 import {
   hasWallet,
   loadKeystore,
+  saveKeystore,
   type KeyEntry,
   keyForNetwork,
   normalizeAddress
 } from '#keystore.ts'
 import { networkFromChainId, type Network } from '#network.ts'
 import { shouldRenderText, type GlobalOptions } from '#output.ts'
-import { loadKeychainSecret } from '#key-storage.ts'
+import { loadKeychainSecret, signSecureEnclaveDigest } from '#key-storage.ts'
 
 type KeyInfo = {
   address: string
@@ -64,6 +66,8 @@ export const transferOptions = z.object({
   feeToken: z.string().optional().describe('Pay fees in a different token (default: same token)')
 })
 
+export const keyCreateOptions = z.object({})
+
 type TransferContext = {
   args: z.infer<typeof transferArgs>
   options: z.infer<typeof transferOptions>
@@ -104,6 +108,64 @@ export async function keys(network: Network, globals: GlobalOptions) {
   }
 
   return response
+}
+
+export async function createKey(network: Network, globals: GlobalOptions) {
+  const entries = await loadKeystore()
+  const root = findLocalRoot(entries, network)
+  const accessPrivateKey = generatePrivateKey()
+  const accessAccount = Account.fromSecp256k1(accessPrivateKey, {
+    access: normalizeAddress(root.walletAddress)
+  })
+  const accessKeyAddress = normalizeAddress(accessAccount.accessKeyAddress)
+  const keyAuthorization = await signLocalKeyAuthorization(root, accessAccount, network)
+  const entry: KeyEntry = {
+    chainId: network.chainId,
+    key: accessPrivateKey,
+    keyAddress: accessKeyAddress,
+    keyAuthorization: KeyAuthorization.serialize(keyAuthorization),
+    keyType: 'secp256k1',
+    limits: [],
+    walletAddress: normalizeAddress(root.walletAddress),
+    walletType: 'local'
+  }
+
+  await saveKeystore([
+    ...entries.filter(
+      key =>
+        !(
+          key.chainId === entry.chainId &&
+          key.keyAddress &&
+          normalizeAddress(key.keyAddress) === accessKeyAddress
+        )
+    ),
+    entry
+  ])
+
+  const response = {
+    access_key: accessKeyAddress,
+    chain_id: network.chainId,
+    key_authorization: entry.keyAuthorization,
+    key_type: entry.keyType,
+    network: network.name,
+    private_key: accessPrivateKey,
+    root_key: normalizeAddress(root.keyAddress ?? root.walletAddress),
+    storage: 'local_file',
+    wallet: normalizeAddress(root.walletAddress),
+    wallet_type: 'local'
+  }
+
+  if (!shouldRenderText(globals)) return response
+  process.stdout.write(`Wallet: ${response.wallet}\n`)
+  process.stdout.write(`Access key: ${response.access_key}\n`)
+  process.stdout.write(`Root key: ${response.root_key}\n`)
+  process.stdout.write(`Network: ${network.name}\n`)
+  process.stdout.write('Storage: local_file\n')
+  process.stdout.write(`Private key: ${accessPrivateKey}\n`)
+  process.stdout.write(
+    '\nThis access key is revocable. The Secure Enclave root remains non-exportable.\n'
+  )
+  return undefined
 }
 
 export async function showWhoami(network: Network, globals: GlobalOptions) {
@@ -331,6 +393,57 @@ async function accountForEntry(entry: KeyEntry) {
   const keyAddress = entry.keyAddress ? normalizeAddress(entry.keyAddress) : undefined
   if (!keyAddress || wallet === keyAddress) return Account.fromSecp256k1(key)
   return Account.fromSecp256k1(key, { access: wallet })
+}
+
+async function signLocalKeyAuthorization(
+  root: KeyEntry,
+  accessAccount: ReturnType<typeof Account.fromSecp256k1>,
+  network: Network
+) {
+  const parameters = { chainId: BigInt(network.chainId) }
+  if (root.keyStorage === 'secure-enclave') {
+    if (!root.keyStorageLabel) throw new Error('Secure Enclave key is missing a label.')
+    const authorization = KeyAuthorization.from({
+      address: normalizeAddress(accessAccount.accessKeyAddress),
+      chainId: parameters.chainId,
+      type: 'secp256k1'
+    })
+    const signature = await signSecureEnclaveDigest(
+      root.keyStorageLabel,
+      KeyAuthorization.getSignPayload(authorization)
+    )
+    return KeyAuthorization.from(authorization, {
+      signature: SignatureEnvelope.from({
+        prehash: true,
+        publicKey: PublicKey.from(signature.publicKey),
+        signature: signature.signature,
+        type: 'p256'
+      })
+    })
+  }
+
+  const rootPrivateKey = (root.key ??
+    (root.keyReference ? await loadKeychainSecret(root.keyReference) : undefined)) as
+    | Hex.Hex
+    | undefined
+  if (!rootPrivateKey) throw new Error('Root key is not exportable.')
+  return await Account.fromSecp256k1(rootPrivateKey).signKeyAuthorization(accessAccount, parameters)
+}
+
+function findLocalRoot(entries: readonly KeyEntry[], network: Network) {
+  const root = entries.find(key => {
+    if (key.chainId !== network.chainId || key.walletType !== 'local') return false
+    const wallet = normalizeAddress(key.walletAddress)
+    const keyAddress = key.keyAddress ? normalizeAddress(key.keyAddress) : undefined
+    return Boolean(
+      keyAddress &&
+      wallet === keyAddress &&
+      (key.key || key.keyReference || key.keyStorage === 'secure-enclave')
+    )
+  })
+  if (!root)
+    throw new Error(`No local root wallet found for '${network.name}'. Run 'tempo wallet init'.`)
+  return root
 }
 
 export function chainForNetwork(network: Network) {
