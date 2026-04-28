@@ -1,0 +1,46 @@
+{
+  "name": "wallet",
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "imports": {
+    "#*": "./src/*",
+    "#package.json": "./package.json"
+  },
+  "scripts": {
+    "dev": "bun ./src/index.ts",
+    "test": "vitest --run",
+    "format": "oxfmt --config='oxfmt.config.ts' --write",
+    "lint": "oxlint --config='oxlint.config.ts' --type-aware --type-check --fix-dangerously",
+    "check": "bun format && bun lint",
+    "check:types": "bun tsgo --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@std/ulid": "npm:@jsr/std__ulid",
+    "accounts": "^0.8.2",
+    "hono": "^4.12.15",
+    "incur": "^0.4.5",
+    "mppx": "^0.6.5",
+    "ox": "^0.14.20",
+    "viem": "^2.48.4",
+    "wagmi": "^3.6.5",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.33.2",
+    "@total-typescript/ts-reset": "^0.6.1",
+    "@types/bun": "^1.3.13",
+    "@types/node": "^25.6.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260427.1",
+    "@vitejs/devtools": "^0.1.15",
+    "@vitest/ui": "^4.1.5",
+    "oxfmt": "^0.47.0",
+    "oxlint": "^1.62.0",
+    "oxlint-tsgolint": "^0.22.1",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
+    "vitest": "^4.1.5"
+  },
+  "packageManager": "bun@1.3.13"
+}
