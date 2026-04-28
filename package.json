@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "node ./src/index.ts",
-    "test": "bun vitest --run",
+    "test": "vitest --run",
     "format": "oxfmt --config='oxfmt.config.ts' --write",
     "lint": "oxlint --config='oxlint.config.ts' --type-aware --type-check --fix-dangerously",
     "check": "bun format && bun lint",

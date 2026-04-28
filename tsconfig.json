@@ -44,9 +44,7 @@
   "files": [
     "env.d.ts",
     "reset.d.ts",
-    "vite.config.ts",
-    "vitest.config.ts",
-    "worker-configuration.d.ts"
+    "vitest.config.ts"
   ],
   "exclude": [
     "_",

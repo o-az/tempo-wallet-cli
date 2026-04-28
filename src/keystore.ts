@@ -3,8 +3,9 @@ import * as toml from '@std/toml'
 import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
 import * as NodeFS from 'node:fs/promises'
+import type { SignatureEnvelope } from 'ox/tempo'
 
-export type KeyType = 'secp256k1' | 'p256' | 'webauthn'
+export type KeyType = Lowercase<SignatureEnvelope.Type>
 export type WalletType = 'local' | 'passkey'
 
 export type StoredTokenLimit = {
