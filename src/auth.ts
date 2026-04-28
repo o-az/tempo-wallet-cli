@@ -264,7 +264,7 @@ function showRemoteLoginPrompt(authUrl: string, code: string) {
   process.stderr.write('Waiting for authentication...\n')
 }
 
-function tryOpenBrowser(url: string, noBrowser: boolean) {
+export function tryOpenBrowser(url: string, noBrowser: boolean) {
   if (process.env.TEMPO_WALLET_DISABLE_BROWSER_OPEN === '1') return 'skipped'
   if (noBrowser) return 'skipped'
   const command =

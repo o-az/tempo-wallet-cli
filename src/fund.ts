@@ -1,0 +1,81 @@
+import * as NodeTimers from 'node:timers/promises'
+import { createPublicClient, http, parseAbi } from 'viem'
+
+import { tryOpenBrowser } from '#auth.ts'
+import type { Network } from '#network.ts'
+import type { GlobalOptions } from '#output.ts'
+import { loadKeystore, keyForNetwork, normalizeAddress } from '#keystore.ts'
+import { formatUnits, chainForNetwork, type ResolvedToken } from '#wallet.ts'
+
+const pollIntervalMs = Number.parseInt(process.env.TEMPO_WALLET_FUND_POLL_INTERVAL_MS ?? '3000', 10)
+const callbackTimeoutMs = Number.parseInt(process.env.TEMPO_WALLET_FUND_TIMEOUT_MS ?? '900000', 10)
+
+const tip20Abi = parseAbi(['function balanceOf(address account) view returns (uint256)'])
+
+export async function fund(
+  network: Network,
+  globals: GlobalOptions,
+  options: { address?: string | undefined; noBrowser: boolean }
+) {
+  const address = await resolveAddress(network, options.address)
+  const fundUrl = fundingUrl(network)
+
+  if (globals.format === 'text' || options.noBrowser) process.stderr.write(`Fund URL: ${fundUrl}\n`)
+  const opened = tryOpenBrowser(fundUrl, options.noBrowser)
+  if (options.noBrowser) {
+    process.stderr.write(`Open this link on your device: ${fundUrl}\n`)
+    process.stderr.write('After funding is complete, return here to continue.\n')
+  }
+  if (opened === 'failed') process.stderr.write(`Open this URL manually: ${fundUrl}\n`)
+
+  if (globals.format === 'text' || options.noBrowser)
+    process.stderr.write('Waiting for funding...\n')
+
+  if (callbackTimeoutMs <= 0) {
+    process.stderr.write('Timed out waiting for funding after 0 minutes.\n')
+    return
+  }
+
+  const before = await queryDefaultBalance(network, address).catch(() => undefined)
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < callbackTimeoutMs) {
+    await NodeTimers.setTimeout(pollIntervalMs)
+    const current = await queryDefaultBalance(network, address).catch(() => undefined)
+    if (current !== undefined && current !== before) {
+      process.stderr.write('\nFunding received!\n')
+      process.stderr.write(`  ${network.token.symbol} balance: ${before ?? '0'} -> ${current}\n`)
+      return
+    }
+  }
+
+  process.stderr.write(
+    `Timed out waiting for funding after ${Math.floor(callbackTimeoutMs / 60000)} minutes.\n`
+  )
+}
+
+async function resolveAddress(network: Network, input: string | undefined) {
+  if (input) return normalizeAddress(input)
+  const key = keyForNetwork(await loadKeystore(), network.chainId)
+  if (!key) throw new Error("No wallet configured. Run 'tempo wallet login'.")
+  return normalizeAddress(key.walletAddress)
+}
+
+function fundingUrl(network: Network) {
+  const authServerUrl = process.env.TEMPO_AUTH_URL ?? network.authUrl
+  const url = new URL(authServerUrl)
+  return `${url.origin}/?action=fund`
+}
+
+async function queryDefaultBalance(network: Network, wallet: string) {
+  const token: ResolvedToken = network.token
+  const balance = await createPublicClient({
+    chain: chainForNetwork(network),
+    transport: http(network.rpcUrl)
+  }).readContract({
+    abi: tip20Abi,
+    address: token.address,
+    args: [wallet as `0x${string}`],
+    functionName: 'balanceOf'
+  })
+  return formatUnits(balance, token.decimals)
+}

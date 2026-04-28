@@ -1,4 +1,4 @@
-import { Address } from 'ox'
+import { Address, Hex } from 'ox'
 import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
 import * as NodeFS from 'node:fs/promises'
@@ -7,20 +7,20 @@ export type KeyType = 'secp256k1' | 'p256' | 'webauthn'
 export type WalletType = 'local' | 'passkey'
 
 export type StoredTokenLimit = {
-  currency: `0x${string}`
   limit: string
+  currency: Address.Address
 }
 
 export type KeyEntry = {
   chainId: number
-  expiry?: number | undefined
-  key?: `0x${string}` | undefined
-  keyAddress?: `0x${string}` | undefined
-  keyAuthorization?: `0x${string}` | undefined
   keyType: KeyType
-  limits: StoredTokenLimit[]
   walletAddress: string
   walletType: WalletType
+  key?: Hex.Hex | undefined
+  expiry?: number | undefined
+  limits: Array<StoredTokenLimit>
+  keyAddress?: Address.Address | undefined
+  keyAuthorization?: `0x${string}` | undefined
 }
 
 export function keysPath() {

@@ -1,5 +1,7 @@
 interface EnvironmentVariables {
   readonly PORT: string
+  readonly TEMPO_WALLET_FUND_TIMEOUT_MS: string
+  readonly TEMPO_WALLET_FUND_POLL_INTERVAL_MS: string
 }
 
 // Node.js `process.env` auto-completion

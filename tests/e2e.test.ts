@@ -2,6 +2,7 @@
 
 import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
+import * as BunSqlite from 'bun:sqlite'
 import * as NodeFS from 'node:fs/promises'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 
@@ -171,7 +172,104 @@ test('transfer dry-run reports a transfer plan without submitting', async () => 
   })
 })
 
-async function runWallet(args: readonly string[]) {
+test('fund prints the auth funding URL and respects explicit address', async () => {
+  const result = await runWallet(['fund', '--address', wallet, '--no-browser'], {
+    TEMPO_WALLET_FUND_TIMEOUT_MS: '0'
+  })
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stderr).toContain(`Fund URL: ${server.url}/?action=fund`)
+  expect(result.stderr).toContain(`Open this link on your device: ${server.url}/?action=fund`)
+})
+
+test('sessions list and sync report empty local session state', async () => {
+  const list = await runWallet(['-j', 'sessions'])
+  const sync = await runWallet(['-j', 'sessions', 'sync'])
+
+  expect(list.exitCode).toBe(0)
+  expect(JSON.parse(list.stdout)).toEqual({ sessions: [], total: 0 })
+  expect(sync.exitCode).toBe(0)
+  expect(JSON.parse(sync.stdout)).toEqual({ sessions: [], total: 0 })
+})
+
+test('sessions list renders local channel records', async () => {
+  await seedSession()
+
+  const result = await runWallet(['--network', 'testnet', '-j', 'sessions', 'list'])
+
+  expect(result.exitCode).toBe(0)
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    sessions: [
+      {
+        channel_id: '0x1234',
+        deposit: '2',
+        network: 'tempo-moderato',
+        origin: 'https://api.example.com',
+        remaining: '1.5',
+        spent: '0.5',
+        status: 'active',
+        symbol: 'pathUSD'
+      }
+    ],
+    total: 1
+  })
+})
+
+test('sessions close dry-run and local close report selected channels', async () => {
+  await seedKey()
+  await seedSession()
+
+  const dryRun = await runWallet([
+    '--network',
+    'testnet',
+    '-j',
+    'sessions',
+    'close',
+    '--all',
+    '--dry-run'
+  ])
+  const close = await runWallet(['--network', 'testnet', '-j', 'sessions', 'close', '--all'])
+  const list = await runWallet(['--network', 'testnet', '-j', 'sessions', 'list'])
+
+  expect(dryRun.exitCode).toBe(0)
+  expect(JSON.parse(dryRun.stdout)).toMatchObject({
+    targets: [{ channel_id: '0x1234', origin: 'https://api.example.com', state: 'active' }]
+  })
+  expect(close.exitCode).toBe(0)
+  expect(JSON.parse(close.stdout)).toMatchObject({
+    closed: 1,
+    failed: 0,
+    pending: 0,
+    results: [{ channel_id: '0x1234', origin: 'https://api.example.com', status: 'closed' }]
+  })
+  expect(JSON.parse(list.stdout)).toEqual({ sessions: [], total: 0 })
+})
+
+test('services list, search, and detail use the service directory', async () => {
+  const services = startServicesServer()
+  try {
+    const env = { TEMPO_SERVICES_URL: `${services.url}/services` }
+    const list = await runWallet(['-j', 'services', 'list'], env)
+    const search = await runWallet(['-j', 'services', '--search', 'weather'], env)
+    const detail = await runWallet(['-j', 'services', 'openai'], env)
+
+    expect(list.exitCode).toBe(0)
+    expect(JSON.parse(list.stdout)).toMatchObject([
+      { endpoint_count: 1, id: 'openai', name: 'OpenAI' },
+      { endpoint_count: 0, id: 'weather', name: 'Weather' }
+    ])
+    expect(JSON.parse(search.stdout)).toMatchObject([{ id: 'weather' }])
+    expect(JSON.parse(detail.stdout)).toMatchObject({
+      endpoints: [{ method: 'POST', path: '/v1/chat' }],
+      id: 'openai',
+      name: 'OpenAI'
+    })
+  } finally {
+    void services.close()
+  }
+})
+
+async function runWallet(args: readonly string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(['bun', './src/index.ts', ...args], {
     cwd: new URL('..', import.meta.url).pathname,
     env: {
@@ -179,7 +277,8 @@ async function runWallet(args: readonly string[]) {
       TEMPO_AUTH_URL: `${server.url}/cli-auth`,
       TEMPO_HOME: tempoHome,
       TEMPO_WALLET_DISABLE_BROWSER_OPEN: '1',
-      TEMPO_WALLET_POLL_INTERVAL_MS: '1'
+      TEMPO_WALLET_POLL_INTERVAL_MS: '1',
+      ...env
     },
     stderr: 'pipe',
     stdout: 'pipe'
@@ -213,6 +312,66 @@ function keysPath() {
   return NodePath.join(tempoHome, 'wallet', 'keys.toml')
 }
 
+async function seedSession() {
+  const path = NodePath.join(tempoHome, 'wallet', 'channels.db')
+  await NodeFS.mkdir(NodePath.dirname(path), { recursive: true })
+  const db = new BunSqlite.Database(path)
+  try {
+    db.exec(`
+      CREATE TABLE channels (
+        channel_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL DEFAULT 1,
+        origin TEXT NOT NULL,
+        request_url TEXT NOT NULL DEFAULT '',
+        chain_id INTEGER NOT NULL,
+        escrow_contract TEXT NOT NULL,
+        token TEXT NOT NULL,
+        payee TEXT NOT NULL,
+        payer TEXT NOT NULL,
+        authorized_signer TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        deposit TEXT NOT NULL,
+        cumulative_amount TEXT NOT NULL,
+        challenge_echo TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'active',
+        close_requested_at INTEGER NOT NULL DEFAULT 0,
+        grace_ready_at INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER NOT NULL,
+        accepted_cumulative TEXT NOT NULL DEFAULT '0',
+        server_spent TEXT NOT NULL DEFAULT '0'
+      )
+    `)
+    db.query(`
+      INSERT INTO channels (
+        channel_id, origin, request_url, chain_id, escrow_contract, token, payee, payer,
+        authorized_signer, salt, deposit, cumulative_amount, accepted_cumulative,
+        challenge_echo, state, created_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      '0x1234',
+      'https://api.example.com',
+      'https://api.example.com/v1',
+      42431,
+      '0x0000000000000000000000000000000000000000',
+      testnetToken,
+      wallet,
+      wallet,
+      wallet,
+      '0x00',
+      '2000000',
+      '500000',
+      '500000',
+      '{}',
+      'active',
+      1_700_000_000,
+      1_700_000_100
+    )
+  } finally {
+    db.close()
+  }
+}
+
 function startAuthServer(): MockAuthServer {
   let polls = 0
   const server = Bun.serve({
@@ -239,6 +398,51 @@ function startAuthServer(): MockAuthServer {
   return {
     close: () => server.stop(true),
     pollCount: () => polls,
+    url: `http://${server.hostname}:${server.port}`
+  }
+}
+
+function startServicesServer() {
+  const server = Bun.serve({
+    fetch(request: Request) {
+      const url = new URL(request.url)
+      if (url.pathname !== '/services') return new Response('not found', { status: 404 })
+      return Response.json({
+        services: [
+          {
+            categories: ['ai'],
+            description: 'AI models',
+            endpoints: [
+              {
+                method: 'POST',
+                path: '/v1/chat',
+                payment: { amount: '1000000', decimals: 6, intent: 'session' }
+              }
+            ],
+            id: 'openai',
+            name: 'OpenAI',
+            serviceUrl: 'https://mpp.openai.example',
+            tags: ['llm'],
+            url: 'https://api.openai.example'
+          },
+          {
+            categories: ['weather'],
+            description: 'Weather data',
+            endpoints: [],
+            id: 'weather',
+            name: 'Weather',
+            serviceUrl: 'https://mpp.weather.example',
+            tags: ['forecast'],
+            url: 'https://api.weather.example'
+          }
+        ]
+      })
+    },
+    port: 0
+  })
+
+  return {
+    close: () => server.stop(true),
     url: `http://${server.hostname}:${server.port}`
   }
 }

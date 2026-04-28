@@ -317,7 +317,7 @@ function accountForEntry(entry: KeyEntry) {
   return Account.fromSecp256k1(entry.key, { access: wallet as `0x${string}` })
 }
 
-function chainForNetwork(network: Network) {
+export function chainForNetwork(network: Network) {
   const chain = network.name === 'tempo' ? tempo : tempoModerato
   return chain.extend({
     feeToken: network.token.address,
@@ -350,7 +350,7 @@ function formatExpiry(expiry: number | undefined) {
   return `${minutes}m`
 }
 
-function formatUnits(value: bigint, decimals: number) {
+export function formatUnits(value: bigint, decimals: number) {
   const scale = 10n ** BigInt(decimals)
   const whole = value / scale
   const fraction = value % scale
@@ -452,7 +452,7 @@ function txUrl(network: Network, txHash: string) {
   return `${network.explorerUrl}/receipt/${txHash}`
 }
 
-type ResolvedToken = {
+export type ResolvedToken = {
   address: `0x${string}`
   decimals: number
   symbol: string

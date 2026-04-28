@@ -1,9 +1,12 @@
 import { Cli, z } from 'incur'
 
+import { fund } from '#fund.ts'
+import { services } from '#services.ts'
 import { resolveNetwork } from '#network.ts'
 import type { GlobalOptions } from '#output.ts'
 import { login, logout, refresh } from '#auth.ts'
 import { keys, transfer, whoami } from '#wallet.ts'
+import { closeSessions, listSessions, syncSessions } from '#sessions.ts'
 
 const cli = Cli.create('wallet', {
   description: 'Wallet identity and custody operations',
@@ -82,6 +85,126 @@ cli.command('transfer', {
   }
 })
 
+cli.command('fund', {
+  description: 'Fund your wallet (testnet faucet or mainnet bridge)',
+  options: z.object({
+    address: z.string().optional().describe('Wallet address to fund (defaults to current wallet)'),
+    noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
+  }),
+  async run(c) {
+    const globals = getGlobals()
+    await fund(resolveNetwork(globals.network), globals, {
+      address: c.options.address,
+      noBrowser: c.options.noBrowser ?? false
+    })
+  }
+})
+
+cli.command('funds', {
+  description: 'Fund your wallet (testnet faucet or mainnet bridge)',
+  options: z.object({
+    address: z.string().optional().describe('Wallet address to fund (defaults to current wallet)'),
+    noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
+  }),
+  async run(c) {
+    const globals = getGlobals()
+    await fund(resolveNetwork(globals.network), globals, {
+      address: c.options.address,
+      noBrowser: c.options.noBrowser ?? false
+    })
+  }
+})
+
+const sessionsCli = Cli.create('sessions', {
+  description: 'Manage payment sessions'
+})
+
+sessionsCli.command('list', {
+  description: 'List payment sessions',
+  options: z.object({
+    all: z
+      .boolean()
+      .optional()
+      .describe('Include local sessions and on-chain orphaned discovery in one view'),
+    orphaned: z
+      .boolean()
+      .optional()
+      .describe('Include on-chain orphaned discovery and persist discovered channels locally')
+  }),
+  async run(c) {
+    const globals = getGlobals()
+    await listSessions(resolveNetwork(globals.network), globals, {
+      all: c.options.all ?? false,
+      orphaned: c.options.orphaned ?? false
+    })
+  }
+})
+
+sessionsCli.command('sync', {
+  description: 'Sync local sessions with on-chain state',
+  options: z.object({
+    origin: z.string().optional().describe("Re-sync a specific origin's close state from on-chain")
+  }),
+  async run(c) {
+    const globals = getGlobals()
+    await syncSessions(resolveNetwork(globals.network), globals, {
+      origin: c.options.origin
+    })
+  }
+})
+
+sessionsCli.command('close', {
+  description: 'Close a payment session and remove it locally',
+  args: z.object({
+    url: z.string().optional().describe('URL, origin, or channel ID (0x...) to close')
+  }),
+  options: z.object({
+    all: z.boolean().optional().describe('Close all active sessions and on-chain channels'),
+    dryRun: z.boolean().optional().describe('Show what would be closed without executing'),
+    finalize: z
+      .boolean()
+      .optional()
+      .describe('Finalize channels pending close (grace period elapsed)'),
+    orphaned: z
+      .boolean()
+      .optional()
+      .describe('Close only orphaned on-chain channels (no local session)'),
+    cooperative: z
+      .boolean()
+      .optional()
+      .describe('Use cooperative close only (no on-chain fallback)')
+  }),
+  async run(c) {
+    const globals = getGlobals()
+    await closeSessions(resolveNetwork(globals.network), globals, {
+      all: c.options.all ?? false,
+      url: c.args.url,
+      dryRun: c.options.dryRun ?? false,
+      orphaned: c.options.orphaned ?? false,
+      finalize: c.options.finalize ?? false,
+      cooperative: c.options.cooperative ?? false
+    })
+  }
+})
+
+cli.command(sessionsCli)
+
+cli.command('services', {
+  description: 'Browse the MPP service directory',
+  args: z.object({
+    serviceId: z.string().optional().describe('Service ID to show details for')
+  }),
+  options: z.object({
+    search: z.string().optional().describe('Search by name, description, tags, or category')
+  }),
+  async run(c) {
+    await services(getGlobals(), {
+      search: c.options.search,
+      serviceId: c.args.serviceId
+    })
+  }
+})
+
 const globals = parseGlobalOptions(process.argv.slice(2))
 
 try {
@@ -103,8 +226,8 @@ function parseGlobalOptions(argv: string[]) {
     verbose: 0
   }
 
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i]!
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!
     if (token === '-j' || token === '--json-output') {
       options.format = 'json'
       continue
@@ -126,7 +249,7 @@ function parseGlobalOptions(argv: string[]) {
       continue
     }
     if (token === '-n' || token === '--network') {
-      options.network = argv[++i]
+      options.network = argv[++index]
       continue
     }
     if (token.startsWith('--network=')) {
@@ -152,5 +275,17 @@ function parseGlobalOptions(argv: string[]) {
     next.push(token)
   }
 
-  return { argv: next, options }
+  return { argv: normalizeCommandDefaults(next), options }
+}
+
+function normalizeCommandDefaults(argv: string[]) {
+  const normalized: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!
+    normalized.push(token)
+    if (token !== 'sessions') continue
+    const next = argv[i + 1]
+    if (!next || (next.startsWith('-') && next !== '--help')) normalized.push('list')
+  }
+  return normalized
 }
