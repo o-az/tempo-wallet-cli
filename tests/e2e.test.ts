@@ -46,7 +46,7 @@ test('login persists a Rust-compatible passkey entry', async () => {
   expect(result.exitCode).toBe(0)
   expect(result.stderr).toContain('Auth URL:')
   expect(result.stderr).toContain('Verification code: ABCD-EFGH')
-  expect(result.stdout).toContain(`Wallet: ${wallet}`)
+  expect(result.stdout).toContain(`wallet: ${wallet}`)
   expect(server.pollCount()).toBeGreaterThanOrEqual(1)
 
   const keys = await readKeys()
@@ -57,6 +57,65 @@ test('login persists a Rust-compatible passkey entry', async () => {
   expect(keys).toContain('key_type = "secp256k1"')
   expect(keys).toContain('key_address = "0x')
   expect(keys).toContain('key = "0x')
+})
+
+test('login respects the configured wallet-next auth path', async () => {
+  const result = await runWallet(['--network', 'testnet', 'login', '--no-browser'], {
+    TEMPO_AUTH_URL: `${server.url}/api/auth/cli`
+  })
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stderr).toContain(`Auth URL: ${server.url}/api/auth/cli?code=ABCD-EFGH`)
+  expect(await readKeys()).toContain(`wallet_address = "${wallet}"`)
+  expect(server.pollCount()).toBeGreaterThanOrEqual(1)
+})
+
+test('init creates a local wallet without browser auth', async () => {
+  const result = await runWallet(['--network', 'testnet', '-j', 'init'])
+
+  expect(result.exitCode).toBe(0)
+  const body = JSON.parse(result.stdout) as { wallet: string }
+  expect(body.wallet).toMatch(/^0x[0-9a-f]{40}$/)
+  expect(server.pollCount()).toBe(0)
+
+  const keys = await readKeys()
+  const address = body.wallet
+  expect(address).toBeTruthy()
+  expect(keys).toContain('[[keys]]')
+  expect(keys).toContain('wallet_type = "local"')
+  expect(keys).toContain(`wallet_address = "${address}"`)
+  expect(keys).toContain(`key_address = "${address}"`)
+  expect(keys).toContain('chain_id = 42431')
+  expect(keys).toContain('key_type = "secp256k1"')
+})
+
+test('init refuses to overwrite an existing wallet unless forced', async () => {
+  const first = await runWallet(['--network', 'testnet', '-j', 'init'])
+  const second = await runWallet(['--network', 'testnet', 'init'])
+  const forced = await runWallet(['--network', 'testnet', '-j', 'init', '--force'])
+
+  expect(first.exitCode).toBe(0)
+  expect(second.exitCode).toBe(1)
+  expect(second.stderr || second.stdout).toContain('already exists')
+  expect(forced.exitCode).toBe(0)
+  expect(JSON.parse(forced.stdout)).toMatchObject({ wallet_type: 'local' })
+})
+
+test('whoami works immediately after headless init', async () => {
+  const init = await runWallet(['--network', 'testnet', '-j', 'init'])
+  const address = (JSON.parse(init.stdout) as { wallet: string }).wallet
+  const whoami = await runWallet(['--network', 'testnet', '-j', 'whoami'])
+
+  expect(whoami.exitCode).toBe(0)
+  expect(JSON.parse(whoami.stdout)).toMatchObject({
+    ready: true,
+    wallet: address,
+    key: {
+      address,
+      chain_id: 42431,
+      network: 'tempo-moderato'
+    }
+  })
 })
 
 test('refresh replaces the current passkey entry', async () => {
@@ -70,8 +129,7 @@ test('refresh replaces the current passkey entry', async () => {
   const result = await runWallet(['--network', 'testnet', 'refresh'])
 
   expect(result.exitCode).toBe(0)
-  expect(result.stderr).toContain('Refreshing access key')
-  expect(result.stderr).toContain('Access key refreshed')
+  expect(result.stderr).toContain('Auth URL:')
 
   const after = await readKeys()
   expect(after).toContain(`wallet_address = "${wallet}"`)
@@ -102,7 +160,7 @@ test('whoami reports unauthenticated state without a wallet', async () => {
   const json = await runWallet(['-j', 'whoami'])
 
   expect(text.exitCode).toBe(0)
-  expect(text.stdout).toBe('Not logged in. Run `tempo wallet login` to get started.\n')
+  expect(text.stdout).toBe('ready: false\n')
   expect(JSON.parse(json.stdout)).toEqual({ ready: false })
 })
 
@@ -111,7 +169,7 @@ test('keys reports an empty keyring', async () => {
   const json = await runWallet(['-j', 'keys'])
 
   expect(text.exitCode).toBe(0)
-  expect(text.stdout).toBe('No keys configured.\n')
+  expect(text.stdout).toBe('keys[0]:\ntotal: 0\n')
   expect(JSON.parse(json.stdout)).toEqual({ keys: [], total: 0 })
 })
 
@@ -304,7 +362,7 @@ test('silent suppresses non-essential fund progress output', async () => {
 
   expect(result.exitCode).toBe(0)
   expect(result.stderr).toBe('')
-  expect(result.stdout).toBe('')
+  expect(result.stdout).toContain('status: timeout')
 })
 
 async function runWallet(args: readonly string[], env: Record<string, string> = {}) {
@@ -422,7 +480,20 @@ async function startAuthServer(): Promise<MockAuthServer> {
         return
       }
 
-      if (request.method === 'POST' && url.pathname === '/cli-auth/poll/ABCDEFGH') {
+      if (request.method === 'POST' && url.pathname === '/api/auth/cli/device-code') {
+        sendHtml(response, '<!DOCTYPE html><html><body>Tempo Wallet</body></html>')
+        return
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/auth/cli/code') {
+        sendJson(response, { code: 'ABCDEFGH' })
+        return
+      }
+
+      if (
+        request.method === 'POST' &&
+        (url.pathname === '/cli-auth/poll/ABCDEFGH' || url.pathname === '/cli-auth/poll/ABCD-EFGH')
+      ) {
         polls += 1
         if (polls % 2 === 1) {
           sendJson(response, { status: 'pending' })
@@ -431,6 +502,24 @@ async function startAuthServer(): Promise<MockAuthServer> {
         sendJson(response, {
           account_address: wallet,
           key_authorization: null,
+          status: 'authorized'
+        })
+        return
+      }
+
+      if (
+        request.method === 'POST' &&
+        (url.pathname === '/api/auth/cli/poll/ABCDEFGH' ||
+          url.pathname === '/api/auth/cli/poll/ABCD-EFGH')
+      ) {
+        polls += 1
+        if (polls % 2 === 1) {
+          sendJson(response, { status: 'pending' })
+          return
+        }
+        sendJson(response, {
+          accountAddress: wallet,
+          keyAuthorization: null,
           status: 'authorized'
         })
         return
@@ -542,5 +631,10 @@ function sendJson(response: NodeHTTP.ServerResponse, body: unknown) {
 
 function sendText(response: NodeHTTP.ServerResponse, body: string, status: number) {
   response.writeHead(status, { 'content-type': 'text/plain' })
+  response.end(body)
+}
+
+function sendHtml(response: NodeHTTP.ServerResponse, body: string) {
+  response.writeHead(200, { 'content-type': 'text/html' })
   response.end(body)
 }

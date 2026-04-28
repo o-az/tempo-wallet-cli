@@ -4,7 +4,13 @@ import { Address, Base64, Hash, Hex } from 'ox'
 import * as NodeTimers from 'node:timers/promises'
 import * as NodeChildProcess from 'node:child_process'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { Account } from 'viem/tempo'
 
+import {
+  createSecureEnclaveIdentity,
+  keychainReference,
+  storeKeychainSecret
+} from '#key-storage.ts'
 import {
   keysPath,
   upsertKey,
@@ -29,19 +35,122 @@ export const loginOptions = z.object({
   noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
 })
 
+export const initOptions = z.object({
+  force: z.boolean().optional().describe('Overwrite the local wallet for this network'),
+  hardwareEncryption: z
+    .boolean()
+    .optional()
+    .describe('Create a non-exportable hardware-backed root wallet')
+})
+
 export const logoutOptions = z.object({
   yes: z.boolean().optional().describe('Skip confirmation prompt')
 })
 
+type InitOptions = z.infer<typeof initOptions>
 type LoginOptions = z.infer<typeof loginOptions>
 type LogoutOptions = z.infer<typeof logoutOptions>
 
 export async function login(network: Network, globals: GlobalOptions, options: LoginOptions) {
-  await loginImpl(network, globals, { forceReauth: false, noBrowser: options.noBrowser })
+  return await loginImpl(network, globals, { forceReauth: false, noBrowser: options.noBrowser })
+}
+
+export async function init(network: Network, globals: GlobalOptions, options: InitOptions) {
+  const keys = await loadKeystore()
+  const existing = keyForNetwork(keys, network.chainId)
+  if (existing && !options.force)
+    throw new Error(
+      `A wallet already exists for '${network.name}'. Use --force to replace it or run 'tempo wallet whoami'.`
+    )
+
+  const entry = options.hardwareEncryption
+    ? await createHardwareRootEntry(network)
+    : await createExportableRootEntry(network)
+  const walletAddress = normalizeAddress(entry.walletAddress)
+  const storage = entry.keyStorage ?? 'file'
+
+  await saveKeystore([...keys.filter(key => key.chainId !== network.chainId), entry])
+
+  const response = {
+    chain_id: network.chainId,
+    exportable: entry.keyStorage !== 'secure-enclave',
+    key_address: walletAddress,
+    ...(entry.keyStorageHash ? { key_storage_hash: entry.keyStorageHash } : {}),
+    ...(entry.keyStorageLabel ? { key_storage_label: entry.keyStorageLabel } : {}),
+    network: network.name,
+    storage,
+    sync: storageSync(storage),
+    wallet: walletAddress,
+    wallet_type: 'local'
+  }
+  if (!shouldRenderText(globals)) return response
+
+  if (!globals.silent)
+    process.stderr.write(
+      options.hardwareEncryption
+        ? 'Hardware-backed root wallet created.\n'
+        : 'Local wallet created.\n'
+    )
+  process.stdout.write(`Wallet: ${walletAddress}\n`)
+  process.stdout.write(`Network: ${network.name}\n`)
+  process.stdout.write(`Storage: ${storage}\n`)
+  if (entry.keyStorage === 'secure-enclave') {
+    process.stdout.write('Exportable: no\n')
+    process.stdout.write('Sync: device_only\n')
+    process.stdout.write(`Secure Enclave label: ${entry.keyStorageLabel}\n`)
+    process.stdout.write(
+      '\nThis root key is non-exportable and can only sign on this device.\n' +
+        'For CLI automation, create a revocable local access key after this manual test path is wired.\n'
+    )
+  }
+  process.stdout.write(`Keys: ${keysPath()}\n`)
+  return undefined
+}
+
+function storageSync(storage: string) {
+  if (storage === 'secure-enclave') return 'device_only'
+  if (storage === 'keychain') return 'keychain_default'
+  return 'local_file'
+}
+
+async function createExportableRootEntry(network: Network): Promise<KeyEntry> {
+  const privateKey = generatePrivateKey()
+  const account = Account.fromSecp256k1(privateKey)
+  const walletAddress = normalizeAddress(account.address)
+  const reference = keychainReference(network.chainId, walletAddress)
+  const storedInKeychain = await storeKeychainSecret(reference, privateKey)
+  return {
+    chainId: network.chainId,
+    ...(storedInKeychain
+      ? { keyReference: reference, keyStorage: 'keychain' }
+      : { key: privateKey }),
+    keyAddress: walletAddress,
+    keyType: 'secp256k1',
+    limits: [],
+    walletAddress,
+    walletType: 'local'
+  }
+}
+
+async function createHardwareRootEntry(network: Network): Promise<KeyEntry> {
+  const label = `tempo_wallet_${network.name}_${Date.now()}_p256_ne`
+  const identity = await createSecureEnclaveIdentity(label)
+  const walletAddress = normalizeAddress(identity.address)
+  return {
+    chainId: network.chainId,
+    keyAddress: walletAddress,
+    keyStorage: 'secure-enclave',
+    keyStorageHash: identity.hash,
+    keyStorageLabel: identity.label,
+    keyType: 'p256',
+    limits: [],
+    walletAddress,
+    walletType: 'local'
+  }
 }
 
 export async function refresh(network: Network, globals: GlobalOptions) {
-  await loginImpl(network, globals, { forceReauth: true, noBrowser: false })
+  return await loginImpl(network, globals, { forceReauth: true, noBrowser: false })
 }
 
 export async function logout(globals: GlobalOptions, options: LogoutOptions) {
@@ -114,15 +223,16 @@ async function loginImpl(
 
 async function doLogin(network: Network, globals: GlobalOptions, noBrowser: boolean) {
   const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
-  const authUrl = new URL(authServerUrl)
-  const authBaseUrl = authUrl.origin
+  const authBaseUrl = resolveAuthBaseUrl(authServerUrl)
+  const authUrl = new URL(authBaseUrl)
 
   const privateKey = generatePrivateKey()
   const account = privateKeyToAccount(privateKey)
   const { verifier, challenge } = createPkcePair()
 
   const code = await createDeviceCode(authBaseUrl, account.publicKey, challenge, network)
-  authUrl.searchParams.set('code', code)
+  const displayCode = formatVerificationCode(code)
+  authUrl.searchParams.set('code', displayCode)
   const url = authUrl.toString()
 
   process.stderr.write(`Auth URL: ${url}\n`)
@@ -132,7 +242,7 @@ async function doLogin(network: Network, globals: GlobalOptions, noBrowser: bool
   else if (shouldRenderText(globals) && !globals.silent) showLoginPrompt(code)
   if (opened === 'failed') process.stderr.write(`Open this URL manually: ${url}\n`)
 
-  const callback = await pollUntilAuthorized(authBaseUrl, code, verifier, globals)
+  const callback = await pollUntilAuthorized(authBaseUrl, displayCode, verifier, globals)
   await saveLoginKey(network, callback, privateKey, account.address)
 }
 
@@ -142,7 +252,7 @@ async function createDeviceCode(
   codeChallenge: string,
   network: Network
 ) {
-  const legacy = await postJson(`${baseUrl}/cli-auth/device-code`, {
+  const legacy = await postJson(`${baseUrl}/device-code`, {
     code_challenge: codeChallenge,
     key_type: 'secp256k1',
     pub_key: publicKey
@@ -150,9 +260,10 @@ async function createDeviceCode(
 
   const legacyJson = asRecord(legacy.json)
   if (legacy.ok && typeof legacyJson.code === 'string') return legacyJson.code
-  if (legacy.status && legacy.status !== 404) throw httpError('request device code', legacy)
+  if (legacy.ok && legacyJson.__nonJson !== true) throw httpError('request device code', legacy)
+  if (!legacy.ok && legacy.status !== 404) throw httpError('request device code', legacy)
 
-  const next = await postJson(`${baseUrl}/cli-auth/code`, {
+  const next = await postJson(`${baseUrl}/code`, {
     chainId: `0x${network.chainId.toString(16)}`,
     codeChallenge,
     keyType: 'secp256k1',
@@ -172,7 +283,7 @@ async function pollUntilAuthorized(
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < callbackTimeoutMs) {
-    const response = await postJson(`${baseUrl}/cli-auth/poll/${code}`, {
+    const response = await postJson(`${baseUrl}/poll/${code}`, {
       code_verifier: codeVerifier,
       codeVerifier
     })
@@ -313,6 +424,13 @@ function createPkcePair() {
   return { challenge, verifier }
 }
 
+function resolveAuthBaseUrl(authServerUrl: string) {
+  const url = new URL(authServerUrl)
+  url.hash = ''
+  url.search = ''
+  return url.toString().replace(/\/$/, '')
+}
+
 async function postJson(url: string, body: unknown) {
   try {
     const response = await fetch(url, {
@@ -321,10 +439,18 @@ async function postJson(url: string, body: unknown) {
       method: 'POST'
     })
     const text = await response.text()
-    const json = text ? JSON.parse(text) : {}
+    const json = text ? parseJsonResponse(text) : {}
     return { json, ok: response.ok, status: response.status }
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : String(error))
+  }
+}
+
+function parseJsonResponse(text: string) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { __nonJson: true, error: text }
   }
 }
 

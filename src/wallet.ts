@@ -14,6 +14,7 @@ import {
 } from '#keystore.ts'
 import { networkFromChainId, type Network } from '#network.ts'
 import { shouldRenderText, type GlobalOptions } from '#output.ts'
+import { loadKeychainSecret } from '#key-storage.ts'
 
 type KeyInfo = {
   address: string
@@ -21,6 +22,7 @@ type KeyInfo = {
   chain_id: number
   expires_at?: string | undefined
   key?: string | undefined
+  key_storage?: string | undefined
   network: string
   spending_limit?: SpendingLimitInfo | undefined
   symbol?: string | undefined
@@ -177,7 +179,7 @@ export async function transfer(network: Network, globals: GlobalOptions, c: Tran
     process.stderr.write(`  Sending ${c.args.amount} ${token.symbol} -> ${shortAddress(to)}\n`)
 
   const client = createWalletClient({
-    account: accountForEntry(entry),
+    account: await accountForEntry(entry),
     chain: chainForNetwork(network),
     transport: http(network.rpcUrl)
   })
@@ -246,7 +248,10 @@ async function buildWhoamiResponse(
   return {
     ready:
       hasWallet(entries) &&
-      Boolean(keyInfo.address !== 'none' && (key.key || key.keyAuthorization)),
+      Boolean(
+        keyInfo.address !== 'none' &&
+        (key.key || key.keyReference || key.keyAuthorization || key.keyStorage === 'secure-enclave')
+      ),
     wallet: normalizeAddress(key.walletAddress),
     ...(balance ? { balance } : {}),
     key: responseKey
@@ -274,6 +279,7 @@ async function buildKeyInfo(network: Network, entry: KeyEntry): Promise<KeyInfo>
       ? { expires_at: new Date(entry.expiry * 1000).toISOString() }
       : {}),
     ...(entry.key ? { key: entry.key } : {}),
+    ...(entry.keyStorage ? { key_storage: entry.keyStorage } : {}),
     network: network.name,
     ...(entry.limits.length > 0 ? { spending_limit: storedSpendingLimit(entry, tokenInfo) } : {}),
     symbol: tokenInfo.symbol,
@@ -311,12 +317,20 @@ async function resolveToken(network: Network, input: string): Promise<ResolvedTo
   return { address, decimals: Number(decimals), symbol: String(symbol) }
 }
 
-function accountForEntry(entry: KeyEntry) {
-  if (!entry.key) throw new Error('No key configured.')
+async function accountForEntry(entry: KeyEntry) {
+  if (entry.keyStorage === 'secure-enclave')
+    throw new Error(
+      'Secure Enclave signing is not wired yet. Create a revocable local access key for automation.'
+    )
+  const key = (entry.key ??
+    (entry.keyReference ? await loadKeychainSecret(entry.keyReference) : undefined)) as
+    | Hex.Hex
+    | undefined
+  if (!key) throw new Error('No key configured.')
   const wallet = normalizeAddress(entry.walletAddress)
   const keyAddress = entry.keyAddress ? normalizeAddress(entry.keyAddress) : undefined
-  if (!keyAddress || wallet === keyAddress) return Account.fromSecp256k1(entry.key)
-  return Account.fromSecp256k1(entry.key, { access: wallet })
+  if (!keyAddress || wallet === keyAddress) return Account.fromSecp256k1(key)
+  return Account.fromSecp256k1(key, { access: wallet })
 }
 
 export function chainForNetwork(network: Network) {
@@ -394,7 +408,8 @@ function requireNetworkKey(entries: readonly KeyEntry[], network: Network) {
   const key = keyForNetwork(entries, network.chainId)
   if (!key)
     throw new Error(`No key configured for network '${network.name}'. Run 'tempo wallet login'.`)
-  if (!key.key) throw new Error('No key configured.')
+  if (!key.key && !key.keyReference && key.keyStorage !== 'secure-enclave')
+    throw new Error('No key configured.')
   return key
 }
 

@@ -13,7 +13,7 @@ import { debug } from '#debug.ts'
 import { fund, fundOptions } from '#fund.ts'
 import { resolveNetwork } from '#network.ts'
 import { services, servicesArgs, servicesOptions } from '#services.ts'
-import { login, loginOptions, logout, logoutOptions, refresh } from '#auth.ts'
+import { init, login, initOptions, logout, refresh, logoutOptions, loginOptions } from '#auth.ts'
 import { envSchema, globalOptionsSchema, type GlobalOptions } from '#output.ts'
 import { keys, transfer, transferArgs, transferOptions, whoami } from '#wallet.ts'
 
@@ -33,6 +33,16 @@ cli.command('login', {
   async run(c) {
     const globals = getGlobals(c)
     return await login(resolveNetwork(globals.network), globals, c.options)
+  }
+})
+
+cli.command('init', {
+  description: 'Create a local Tempo wallet without opening a browser',
+  options: initOptions,
+  output: commandOutput,
+  async run(c) {
+    const globals = getGlobals(c)
+    return await init(resolveNetwork(globals.network), globals, c.options)
   }
 })
 
