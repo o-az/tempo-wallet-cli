@@ -7,19 +7,23 @@ import type { Network } from '#network.ts'
 import { hasWallet, keysPath, loadKeystore } from '#keystore.ts'
 import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
-type ChannelRecord = {
-  accepted_cumulative: string
-  channel_id: string
-  chain_id: number
-  close_requested_at: number
-  created_at: number
-  cumulative_amount: string
-  deposit: string
-  grace_ready_at: number
-  last_used_at: number
-  origin: string
-  state: string
-}
+const channelRecordSchema = z.object({
+  accepted_cumulative: z.string(),
+  channel_id: z.string(),
+  chain_id: z.number(),
+  close_requested_at: z.number(),
+  created_at: z.number(),
+  cumulative_amount: z.string(),
+  deposit: z.string(),
+  grace_ready_at: z.number(),
+  last_used_at: z.number(),
+  origin: z.string(),
+  state: z.string()
+})
+
+const channelRecordsSchema = z.array(channelRecordSchema)
+
+type ChannelRecord = z.infer<typeof channelRecordSchema>
 
 type SessionItem = {
   channel_id: string
@@ -143,20 +147,21 @@ function loadChannelRecords(): ChannelRecord[] {
   try {
     const db = new NodeSqlite.DatabaseSync(channelDbPath(), { readOnly: true })
     try {
-      return db
+      const rows = db
         .prepare(`
         SELECT channel_id, chain_id, origin, deposit, cumulative_amount, accepted_cumulative,
                state, close_requested_at, grace_ready_at, created_at, last_used_at
         FROM channels
         ORDER BY last_used_at DESC
       `)
-        .all() as ChannelRecord[]
+        .all()
+      return channelRecordsSchema.parse(rows)
     } finally {
       db.close()
     }
   } catch (error) {
-    if ((error as Error).message.includes('unable to open database file')) return []
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    if (errorMessage(error).includes('unable to open database file')) return []
+    if (errorCode(error) === 'ENOENT') return []
     return []
   }
 }
@@ -321,4 +326,12 @@ function statusAt(record: ChannelRecord) {
       : { remainingSecs: remaining, status: 'closing' }
   }
   return { status: state }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : ''
+}
+
+function errorCode(error: unknown) {
+  return error instanceof Error && 'code' in error ? error.code : undefined
 }

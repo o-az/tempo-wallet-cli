@@ -1,6 +1,6 @@
 import { z } from 'incur'
-import { Base64, Hash, Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
+import { Address, Base64, Hash, Hex } from 'ox'
 import * as NodeTimers from 'node:timers/promises'
 import * as NodeChildProcess from 'node:child_process'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -139,7 +139,7 @@ async function doLogin(network: Network, globals: GlobalOptions, noBrowser: bool
 
 async function createDeviceCode(
   baseUrl: string,
-  publicKey: `0x${string}`,
+  publicKey: Hex.Hex,
   codeChallenge: string,
   network: Network
 ) {
@@ -199,7 +199,7 @@ async function pollUntilAuthorized(baseUrl: string, code: string, codeVerifier: 
 async function saveLoginKey(
   network: Network,
   callback: { accountAddress: string; keyAuthorization: unknown },
-  privateKey: `0x${string}`,
+  privateKey: Hex.Hex,
   keyAddress: string
 ) {
   const walletAddress = normalizeAddress(callback.accountAddress)
@@ -208,7 +208,7 @@ async function saveLoginKey(
     chainId: parsed?.chainId && parsed.chainId !== 0 ? parsed.chainId : network.chainId,
     ...(typeof parsed?.expiry === 'number' ? { expiry: parsed.expiry } : {}),
     key: privateKey,
-    keyAddress: normalizeAddress(keyAddress) as `0x${string}`,
+    keyAddress: normalizeAddress(keyAddress),
     ...(parsed?.hex ? { keyAuthorization: parsed.hex } : {}),
     keyType: parsed?.keyType ?? 'secp256k1',
     limits: parsed?.limits ?? [],
@@ -224,9 +224,9 @@ function parseKeyAuthorization(value: unknown, expectedKeyAddress: string) {
 
   const signed =
     typeof value === 'string'
-      ? KeyAuthorization.deserialize(value as `0x${string}`)
-      : KeyAuthorization.fromRpc(value as KeyAuthorization.Rpc)
-  if (!signed.signature) throw new Error('Key authorization is missing a signature.')
+      ? KeyAuthorization.deserialize(hexSchema.parse(value))
+      : KeyAuthorization.fromRpc(keyAuthorizationRpcSchema.parse(value))
+  assertSignedKeyAuthorization(signed)
 
   const keyAddress = normalizeAddress(signed.address)
   if (keyAddress !== normalizeAddress(expectedKeyAddress))
@@ -235,11 +235,11 @@ function parseKeyAuthorization(value: unknown, expectedKeyAddress: string) {
   return {
     chainId: Number(signed.chainId),
     expiry: signed.expiry ?? 0,
-    hex: typeof value === 'string' ? (value as `0x${string}`) : KeyAuthorization.serialize(signed),
+    hex: typeof value === 'string' ? hexSchema.parse(value) : KeyAuthorization.serialize(signed),
     keyType: keyTypeToStored(signed.type),
     limits: signed.limits?.map(
       (limit): StoredTokenLimit => ({
-        currency: normalizeAddress(limit.token) as `0x${string}`,
+        currency: normalizeAddress(limit.token),
         limit: String(limit.limit)
       })
     )
@@ -335,8 +335,32 @@ function keyTypeToStored(value: string): KeyType {
   return 'secp256k1'
 }
 
+const recordSchema = z.record(z.string(), z.unknown()).catch({})
+const hexSchema = z.custom<Hex.Hex>(
+  value => typeof value === 'string' && /^0x[0-9a-fA-F]*$/.test(value)
+)
+const addressSchema = z.custom<Address.Address>(
+  value => typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value)
+)
+const keyAuthorizationRpcShapeSchema = z.object({
+  chainId: hexSchema,
+  expiry: hexSchema.nullish(),
+  keyId: addressSchema,
+  keyType: z.enum(['secp256k1', 'p256', 'webAuthn']),
+  signature: z.object({}).passthrough()
+})
+const keyAuthorizationRpcSchema = z.custom<KeyAuthorization.Rpc>(
+  value => keyAuthorizationRpcShapeSchema.safeParse(value).success
+)
+
 function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+  return recordSchema.parse(value)
+}
+
+function assertSignedKeyAuthorization(
+  auth: KeyAuthorization.KeyAuthorization
+): asserts auth is KeyAuthorization.Signed {
+  if (!auth.signature) throw new Error('Key authorization is missing a signature.')
 }
 
 function confirm(message: string) {

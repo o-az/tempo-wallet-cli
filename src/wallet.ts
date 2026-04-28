@@ -1,4 +1,5 @@
 import { z } from 'incur'
+import type { Address, Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
 import { tempo, tempoModerato } from 'viem/chains'
 import { Account, Actions, Abis } from 'viem/tempo'
@@ -186,16 +187,16 @@ export async function transfer(network: Network, globals: GlobalOptions, c: Tran
     () =>
       Actions.token.transfer(client, {
         amount,
-        feeToken: feeToken as `0x${string}`,
-        to: to as `0x${string}`,
+        feeToken,
+        to,
         token: token.address
       }),
     () =>
       Actions.token.transfer(client, {
         amount,
-        feeToken: feeToken as `0x${string}`,
+        feeToken,
         keyAuthorization,
-        to: to as `0x${string}`,
+        to,
         token: token.address
       }),
     keyAuthorization
@@ -282,18 +283,18 @@ async function buildKeyInfo(network: Network, entry: KeyEntry): Promise<KeyInfo>
   }
 }
 
-async function queryBalance(network: Network, wallet: string, token: ResolvedToken) {
+async function queryBalance(network: Network, wallet: Address.Address, token: ResolvedToken) {
   const balance = await publicClient(network).readContract({
     abi: Abis.tip20,
     address: token.address,
-    args: [wallet as `0x${string}`],
+    args: [wallet],
     functionName: 'balanceOf'
   })
   return formatUnits(balance, token.decimals)
 }
 
 async function resolveToken(network: Network, input: string): Promise<ResolvedToken> {
-  const address = normalizeAddress(input) as `0x${string}`
+  const address = normalizeAddress(input)
   if (address === normalizeAddress(network.token.address)) {
     return {
       address,
@@ -315,7 +316,7 @@ function accountForEntry(entry: KeyEntry) {
   const wallet = normalizeAddress(entry.walletAddress)
   const keyAddress = entry.keyAddress ? normalizeAddress(entry.keyAddress) : undefined
   if (!keyAddress || wallet === keyAddress) return Account.fromSecp256k1(entry.key)
-  return Account.fromSecp256k1(entry.key, { access: wallet as `0x${string}` })
+  return Account.fromSecp256k1(entry.key, { access: wallet })
 }
 
 export function chainForNetwork(network: Network) {
@@ -372,7 +373,14 @@ function parseStoredKeyAuthorization(entry: KeyEntry) {
   if (!entry.keyAuthorization) return undefined
   const auth = KeyAuthorization.deserialize(entry.keyAuthorization)
   if (!auth.signature) return undefined
-  return auth as KeyAuthorization.Signed
+  assertSignedKeyAuthorization(auth)
+  return auth
+}
+
+function assertSignedKeyAuthorization(
+  auth: KeyAuthorization.KeyAuthorization
+): asserts auth is KeyAuthorization.Signed {
+  if (!auth.signature) throw new Error('Key authorization is missing a signature.')
 }
 
 function publicClient(network: Network) {
@@ -422,7 +430,7 @@ function transferResponse(input: {
   symbol: string
   to: string
   token: string
-  txHash?: string | undefined
+  txHash?: Hex.Hex | undefined
 }) {
   return {
     amount: input.amount,
@@ -449,12 +457,12 @@ async function withProvisioningRetry<T>(
   }
 }
 
-function txUrl(network: Network, txHash: string) {
+function txUrl(network: Network, txHash: Hex.Hex) {
   return `${network.explorerUrl}/receipt/${txHash}`
 }
 
 export type ResolvedToken = {
-  address: `0x${string}`
+  address: Address.Address
   decimals: number
   symbol: string
 }

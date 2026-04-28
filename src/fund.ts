@@ -75,7 +75,7 @@ function fundingUrl(network: Network) {
   return `${url.origin}/?action=fund`
 }
 
-async function queryDefaultBalance(network: Network, wallet: string) {
+async function queryDefaultBalance(network: Network, wallet: ResolvedToken['address']) {
   const token: ResolvedToken = network.token
   const balance = await createPublicClient({
     chain: chainForNetwork(network),
@@ -83,7 +83,7 @@ async function queryDefaultBalance(network: Network, wallet: string) {
   }).readContract({
     abi: tip20Abi,
     address: token.address,
-    args: [wallet as `0x${string}`],
+    args: [wallet],
     functionName: 'balanceOf'
   })
   return formatUnits(balance, token.decimals)

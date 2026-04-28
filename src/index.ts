@@ -228,11 +228,11 @@ function parseGlobalOptions(argv: string[]) {
 
 function normalizeCommandDefaults(argv: string[]) {
   const normalized: string[] = []
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i]!
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!
     normalized.push(token)
     if (token !== 'sessions') continue
-    const next = argv[i + 1]
+    const next = argv[index + 1]
     if (!next || (next.startsWith('-') && next !== '--help')) normalized.push('list')
   }
   return normalized

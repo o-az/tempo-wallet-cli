@@ -1,3 +1,5 @@
+import type { Address } from 'ox'
+
 export type Network = {
   authUrl: string
   chainId: number
@@ -5,7 +7,7 @@ export type Network = {
   name: 'tempo' | 'tempo-moderato'
   rpcUrl: string
   token: {
-    address: `0x${string}`
+    address: Address.Address
     decimals: number
     symbol: string
   }

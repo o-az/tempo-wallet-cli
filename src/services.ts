@@ -4,49 +4,53 @@ import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
 const servicesApiUrl = 'https://mpp.sh/api/services'
 
-type ServiceRegistry = {
-  services: Service[]
-}
+const endpointPaymentSchema = z.object({
+  intent: z.string(),
+  amount: z.string().optional(),
+  decimals: z.number().optional(),
+  unitType: z.string().optional(),
+  unit_type: z.string().optional(),
+  description: z.string().optional(),
+  dynamic: z.boolean().optional()
+})
 
-type Service = {
-  id: string
-  name: string
-  url: string
-  serviceUrl?: string | undefined
-  service_url?: string | undefined
-  description?: string | undefined
-  categories?: string[] | undefined
-  tags?: string[] | undefined
-  docs?: ServiceDocs | undefined
-  endpoints?: Array<Endpoint> | undefined
-}
+const endpointSchema = z.object({
+  method: z.string(),
+  path: z.string(),
+  description: z.string().optional(),
+  payment: endpointPaymentSchema.optional(),
+  docs: z.string().optional()
+})
 
-type ServiceDocs = {
-  homepage?: string | undefined
-  llmsTxt?: string | undefined
-  llms_txt?: string | undefined
-  openapi?: string | undefined
-  apiReference?: string | undefined
-  api_reference?: string | undefined
-}
+const serviceDocsSchema = z.object({
+  homepage: z.string().optional(),
+  llmsTxt: z.string().optional(),
+  llms_txt: z.string().optional(),
+  openapi: z.string().optional(),
+  apiReference: z.string().optional(),
+  api_reference: z.string().optional()
+})
 
-type Endpoint = {
-  method: string
-  path: string
-  description?: string | undefined
-  payment?: EndpointPayment | undefined
-  docs?: string | undefined
-}
+const serviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  url: z.string(),
+  serviceUrl: z.string().optional(),
+  service_url: z.string().optional(),
+  description: z.string().optional(),
+  categories: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  docs: serviceDocsSchema.optional(),
+  endpoints: z.array(endpointSchema).optional()
+})
 
-type EndpointPayment = {
-  intent: string
-  amount?: string | undefined
-  decimals?: number | undefined
-  unitType?: string | undefined
-  unit_type?: string | undefined
-  description?: string | undefined
-  dynamic?: boolean | undefined
-}
+const serviceRegistrySchema = z.object({
+  services: z.array(serviceSchema)
+})
+
+type ServiceRegistry = z.infer<typeof serviceRegistrySchema>
+type Service = z.infer<typeof serviceSchema>
+type EndpointPayment = z.infer<typeof endpointPaymentSchema>
 
 export const servicesArgs = z.object({
   serviceId: z.string().optional().describe('Service ID to show details for')
@@ -82,7 +86,7 @@ async function fetchServices(): Promise<ServiceRegistry> {
     throw new Error(
       `fetch service directory failed with HTTP ${response.status}: ${await response.text()}`
     )
-  return (await response.json()) as ServiceRegistry
+  return serviceRegistrySchema.parse(await response.json())
 }
 
 function renderServiceList(
