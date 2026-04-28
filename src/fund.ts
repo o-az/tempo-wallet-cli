@@ -20,19 +20,21 @@ export async function fund(
   const address = await resolveAddress(network, options.address)
   const fundUrl = fundingUrl(network)
 
-  if (globals.format === 'text' || options.noBrowser) process.stderr.write(`Fund URL: ${fundUrl}\n`)
+  if ((globals.format === 'text' || options.noBrowser) && !globals.silent)
+    process.stderr.write(`Fund URL: ${fundUrl}\n`)
   const opened = tryOpenBrowser(fundUrl, options.noBrowser)
-  if (options.noBrowser) {
+  if (options.noBrowser && !globals.silent) {
     process.stderr.write(`Open this link on your device: ${fundUrl}\n`)
     process.stderr.write('After funding is complete, return here to continue.\n')
   }
-  if (opened === 'failed') process.stderr.write(`Open this URL manually: ${fundUrl}\n`)
+  if (opened === 'failed' && !globals.silent)
+    process.stderr.write(`Open this URL manually: ${fundUrl}\n`)
 
-  if (globals.format === 'text' || options.noBrowser)
+  if ((globals.format === 'text' || options.noBrowser) && !globals.silent)
     process.stderr.write('Waiting for funding...\n')
 
   if (callbackTimeoutMs <= 0) {
-    process.stderr.write('Timed out waiting for funding after 0 minutes.\n')
+    if (!globals.silent) process.stderr.write('Timed out waiting for funding after 0 minutes.\n')
     return
   }
 
@@ -42,15 +44,18 @@ export async function fund(
     await NodeTimers.setTimeout(pollIntervalMs)
     const current = await queryDefaultBalance(network, address).catch(() => undefined)
     if (current !== undefined && current !== before) {
-      process.stderr.write('\nFunding received!\n')
-      process.stderr.write(`  ${network.token.symbol} balance: ${before ?? '0'} -> ${current}\n`)
+      if (!globals.silent) {
+        process.stderr.write('\nFunding received!\n')
+        process.stderr.write(`  ${network.token.symbol} balance: ${before ?? '0'} -> ${current}\n`)
+      }
       return
     }
   }
 
-  process.stderr.write(
-    `Timed out waiting for funding after ${Math.floor(callbackTimeoutMs / 60000)} minutes.\n`
-  )
+  if (!globals.silent)
+    process.stderr.write(
+      `Timed out waiting for funding after ${Math.floor(callbackTimeoutMs / 60000)} minutes.\n`
+    )
 }
 
 async function resolveAddress(network: Network, input: string | undefined) {

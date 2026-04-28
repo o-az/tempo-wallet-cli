@@ -269,6 +269,38 @@ test('services list, search, and detail use the service directory', async () => 
   }
 })
 
+test('help delegates to command help', async () => {
+  const root = await runWallet(['help'])
+  const transfer = await runWallet(['help', 'transfer'])
+
+  expect(root.exitCode).toBe(0)
+  expect(root.stdout).toContain('Wallet identity and custody operations')
+  expect(transfer.exitCode).toBe(0)
+  expect(transfer.stdout).toContain('wallet transfer — Transfer tokens to an address')
+})
+
+test('debug reports support info and honors network flag', async () => {
+  const result = await runWallet(['--network', 'testnet', '--verbose', '-j', 'debug'])
+
+  expect(result.exitCode).toBe(0)
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    logged_in: false,
+    network: 'tempo-moderato',
+    request_version: '0.0.0',
+    wallet_version: '0.0.0'
+  })
+})
+
+test('silent suppresses non-essential fund progress output', async () => {
+  const result = await runWallet(['--silent', 'fund', '--address', wallet, '--no-browser'], {
+    TEMPO_WALLET_FUND_TIMEOUT_MS: '0'
+  })
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(result.stdout).toBe('')
+})
+
 async function runWallet(args: readonly string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(['bun', './src/index.ts', ...args], {
     cwd: new URL('..', import.meta.url).pathname,

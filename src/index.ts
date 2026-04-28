@@ -1,6 +1,7 @@
 import { Cli, z } from 'incur'
 
 import { fund } from '#fund.ts'
+import { debug } from '#debug.ts'
 import { services } from '#services.ts'
 import { resolveNetwork } from '#network.ts'
 import type { GlobalOptions } from '#output.ts'
@@ -205,6 +206,14 @@ cli.command('services', {
   }
 })
 
+cli.command('debug', {
+  description: 'Collect debug info for support',
+  async run() {
+    const globals = getGlobals()
+    await debug(resolveNetwork(globals.network), globals)
+  }
+})
+
 const globals = parseGlobalOptions(process.argv.slice(2))
 
 try {
@@ -244,6 +253,10 @@ function parseGlobalOptions(argv: string[]) {
       options.verbose += 1
       continue
     }
+    if (token.startsWith('--verbose=')) {
+      options.verbose += Number.parseInt(token.slice('--verbose='.length), 10) || 0
+      continue
+    }
     if (/^-v+$/.test(token) && token.length > 2) {
       options.verbose += token.length - 1
       continue
@@ -275,7 +288,7 @@ function parseGlobalOptions(argv: string[]) {
     next.push(token)
   }
 
-  return { argv: normalizeCommandDefaults(next), options }
+  return { argv: normalizeHelp(normalizeCommandDefaults(next)), options }
 }
 
 function normalizeCommandDefaults(argv: string[]) {
@@ -288,4 +301,10 @@ function normalizeCommandDefaults(argv: string[]) {
     if (!next || (next.startsWith('-') && next !== '--help')) normalized.push('list')
   }
   return normalized
+}
+
+function normalizeHelp(argv: string[]) {
+  if (argv[0] !== 'help') return argv
+  const rest = argv.slice(1)
+  return rest.length === 0 ? ['--help'] : [...rest, '--help']
 }

@@ -184,6 +184,7 @@ function renderDryRun(
         : []
   const response = { targets }
   if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
+  if (globals.silent) return
   process.stderr.write(`[DRY RUN] Would close ${targets.length} session(s)\n`)
   for (const target of targets) {
     process.stderr.write(
@@ -200,6 +201,7 @@ function renderCloseSummary(globals: GlobalOptions, records: ChannelRecord[]) {
   }))
   const response = { closed: results.length, failed: 0, pending: 0, results }
   if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
+  if (globals.silent) return
   process.stdout.write(
     results.length === 0 ? 'No channel to close.\n' : `${results.length} closed\n`
   )
