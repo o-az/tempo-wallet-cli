@@ -1,6 +1,11 @@
 interface EnvironmentVariables {
   readonly PORT: string
+  readonly TEMPO_HOME: string
+  readonly TEMPO_AUTH_URL: string
+  readonly CHANNEL_DB_PATH: string
+  readonly TEMPO_WALLET_SERVICES_URL: string
   readonly TEMPO_WALLET_FUND_TIMEOUT_MS: string
+  readonly TEMPO_WALLET_DISABLE_BROWSER_OPEN: string
   readonly TEMPO_WALLET_FUND_POLL_INTERVAL_MS: string
 }
 
