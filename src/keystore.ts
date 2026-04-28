@@ -1,4 +1,5 @@
 import { Address, Hex } from 'ox'
+import * as toml from '@std/toml'
 import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
 import * as NodeFS from 'node:fs/promises'
@@ -118,109 +119,96 @@ function isAddress(value: string): value is `0x${string}` {
   return /^0x[0-9a-fA-F]{40}$/.test(value)
 }
 
+type TomlKey = {
+  chain_id?: unknown
+  expiry?: unknown
+  key?: unknown
+  key_address?: unknown
+  key_authorization?: unknown
+  key_type?: unknown
+  limits?: unknown
+  wallet_address?: unknown
+  wallet_type?: unknown
+}
+
+type TomlLimit = {
+  currency?: unknown
+  limit?: unknown
+}
+
 function parseKeystore(text: string) {
-  const keys: KeyEntry[] = []
-  let key: Partial<KeyEntry> | undefined
-  let limit: Partial<StoredTokenLimit> | undefined
+  const data = toml.parse(text)
+  const keys = Array.isArray(data.keys) ? data.keys : []
 
-  function flushLimit() {
-    if (!key || !limit?.currency || typeof limit.limit !== 'string') return
-    key.limits = [...(key.limits ?? []), limit as StoredTokenLimit]
-    limit = undefined
-  }
+  return keys.flatMap((rawKey): KeyEntry[] => {
+    if (!isTomlKey(rawKey) || typeof rawKey.wallet_address !== 'string') return []
+    if (!isAddress(rawKey.wallet_address)) return []
 
-  function flushKey() {
-    flushLimit()
-    if (!key?.walletAddress) {
-      key = undefined
-      return
-    }
-    if (!isAddress(key.walletAddress)) {
-      key = undefined
-      return
-    }
-    keys.push({
-      chainId: key.chainId ?? 0,
-      ...(typeof key.expiry === 'number' ? { expiry: key.expiry } : {}),
-      ...(key.key ? { key: key.key } : {}),
-      ...(key.keyAddress ? { keyAddress: normalizeAddress(key.keyAddress) as `0x${string}` } : {}),
-      ...(key.keyAuthorization ? { keyAuthorization: key.keyAuthorization } : {}),
-      keyType: key.keyType ?? 'secp256k1',
-      limits: key.limits ?? [],
-      walletAddress: normalizeAddress(key.walletAddress),
-      walletType: key.walletType ?? 'local'
-    })
-    key = undefined
-  }
+    const limits = (Array.isArray(rawKey.limits) ? rawKey.limits : []).flatMap(
+      (rawLimit): StoredTokenLimit[] => {
+        if (
+          !isTomlLimit(rawLimit) ||
+          typeof rawLimit.currency !== 'string' ||
+          typeof rawLimit.limit !== 'string'
+        )
+          return []
+        return [
+          { currency: normalizeAddress(rawLimit.currency) as `0x${string}`, limit: rawLimit.limit }
+        ]
+      }
+    )
 
-  for (const raw of text.split('\n')) {
-    const line = raw.trim()
-    if (!line || line.startsWith('#')) continue
-
-    if (line === '[[keys]]') {
-      flushKey()
-      key = {}
-      continue
-    }
-
-    if (line === '[[keys.limits]]') {
-      flushLimit()
-      limit = {}
-      continue
-    }
-
-    const match = line.match(/^([a-z_]+)\s*=\s*(.+)$/)
-    if (!match) continue
-    const [, name, rawValue] = match
-    const value = stripQuotes(rawValue!.trim())
-
-    if (limit) {
-      if (name === 'currency') limit.currency = normalizeAddress(value) as `0x${string}`
-      if (name === 'limit') limit.limit = value
-      continue
-    }
-
-    if (!key) continue
-    if (name === 'wallet_type') key.walletType = value as WalletType
-    if (name === 'wallet_address') key.walletAddress = value
-    if (name === 'chain_id') key.chainId = Number.parseInt(value, 10)
-    if (name === 'key_type') key.keyType = value as KeyType
-    if (name === 'key_address') key.keyAddress = value as `0x${string}`
-    if (name === 'key') key.key = value as `0x${string}`
-    if (name === 'key_authorization') key.keyAuthorization = value as `0x${string}`
-    if (name === 'expiry') key.expiry = Number.parseInt(value, 10)
-  }
-
-  flushKey()
-  return keys
+    return [
+      {
+        chainId: typeof rawKey.chain_id === 'number' ? rawKey.chain_id : 0,
+        ...(typeof rawKey.expiry === 'number' ? { expiry: rawKey.expiry } : {}),
+        ...(typeof rawKey.key === 'string' ? { key: rawKey.key as `0x${string}` } : {}),
+        ...(typeof rawKey.key_address === 'string'
+          ? { keyAddress: normalizeAddress(rawKey.key_address) as `0x${string}` }
+          : {}),
+        ...(typeof rawKey.key_authorization === 'string'
+          ? { keyAuthorization: rawKey.key_authorization as `0x${string}` }
+          : {}),
+        keyType: typeof rawKey.key_type === 'string' ? (rawKey.key_type as KeyType) : 'secp256k1',
+        limits,
+        walletAddress: normalizeAddress(rawKey.wallet_address),
+        walletType:
+          typeof rawKey.wallet_type === 'string' ? (rawKey.wallet_type as WalletType) : 'local'
+      }
+    ]
+  })
 }
 
 function stringifyKeystore(keys: readonly KeyEntry[]) {
+  const data = {
+    keys: keys.map(key => ({
+      wallet_type: key.walletType,
+      wallet_address: key.walletAddress,
+      chain_id: key.chainId,
+      key_type: key.keyType,
+      ...(key.keyAddress ? { key_address: key.keyAddress } : {}),
+      ...(key.key ? { key: key.key } : {}),
+      ...(key.keyAuthorization ? { key_authorization: key.keyAuthorization } : {}),
+      ...(typeof key.expiry === 'number' ? { expiry: key.expiry } : {}),
+      limits: key.limits.map(limit => ({
+        currency: limit.currency,
+        limit: limit.limit
+      }))
+    }))
+  }
+
   return [
     '# Tempo wallet keys - managed by `tempo wallet`',
     '# Do not edit manually.',
-    '',
-    ...keys.flatMap(key => [
-      '[[keys]]',
-      `wallet_type = "${key.walletType}"`,
-      `wallet_address = "${key.walletAddress}"`,
-      `chain_id = ${key.chainId}`,
-      `key_type = "${key.keyType}"`,
-      ...(key.keyAddress ? [`key_address = "${key.keyAddress}"`] : []),
-      ...(key.key ? [`key = "${key.key}"`] : []),
-      ...(key.keyAuthorization ? [`key_authorization = "${key.keyAuthorization}"`] : []),
-      ...(typeof key.expiry === 'number' ? [`expiry = ${key.expiry}`] : []),
-      '',
-      ...key.limits.flatMap(limit => [
-        '[[keys.limits]]',
-        `currency = "${limit.currency}"`,
-        `limit = "${limit.limit}"`,
-        ''
-      ])
-    ])
+    toml.stringify(data).trimEnd(),
+    ''
   ].join('\n')
 }
 
-function stripQuotes(value: string) {
-  return value.replace(/^"|"$/g, '')
+function isTomlKey(value: unknown): value is TomlKey {
+  return typeof value === 'object' && value !== null
+}
+
+function isTomlLimit(value: unknown): value is TomlLimit {
+  return typeof value === 'object' && value !== null
 }

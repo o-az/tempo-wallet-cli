@@ -1,8 +1,8 @@
 import { z } from 'incur'
 import { KeyAuthorization } from 'ox/tempo'
-import { Account, Actions } from 'viem/tempo'
 import { tempo, tempoModerato } from 'viem/chains'
-import { createPublicClient, createWalletClient, http, parseAbi, parseUnits } from 'viem'
+import { Account, Actions, Abis } from 'viem/tempo'
+import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 
 import {
   hasWallet,
@@ -13,13 +13,6 @@ import {
 } from '#keystore.ts'
 import { networkFromChainId, type Network } from '#network.ts'
 import { shouldRenderText, type GlobalOptions } from '#output.ts'
-
-const tip20Abi = parseAbi([
-  'function balanceOf(address account) view returns (uint256)',
-  'function decimals() view returns (uint8)',
-  'function symbol() view returns (string)',
-  'function transfer(address to, uint256 amount) returns (bool)'
-])
 
 type KeyInfo = {
   address: string
@@ -291,7 +284,7 @@ async function buildKeyInfo(network: Network, entry: KeyEntry): Promise<KeyInfo>
 
 async function queryBalance(network: Network, wallet: string, token: ResolvedToken) {
   const balance = await publicClient(network).readContract({
-    abi: tip20Abi,
+    abi: Abis.tip20,
     address: token.address,
     args: [wallet as `0x${string}`],
     functionName: 'balanceOf'
@@ -311,8 +304,8 @@ async function resolveToken(network: Network, input: string): Promise<ResolvedTo
 
   const client = publicClient(network)
   const [decimals, symbol] = await Promise.all([
-    client.readContract({ abi: tip20Abi, address, functionName: 'decimals' }),
-    client.readContract({ abi: tip20Abi, address, functionName: 'symbol' }).catch(() => address)
+    client.readContract({ abi: Abis.tip20, address, functionName: 'decimals' }),
+    client.readContract({ abi: Abis.tip20, address, functionName: 'symbol' }).catch(() => address)
   ])
   return { address, decimals: Number(decimals), symbol: String(symbol) }
 }

@@ -16,6 +16,7 @@
     "check:types": "bun tsgo --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@std/toml": "npm:@jsr/std__toml",
     "@std/ulid": "npm:@jsr/std__ulid",
     "accounts": "^0.8.2",
     "hono": "^4.12.15",

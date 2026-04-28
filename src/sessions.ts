@@ -2,8 +2,8 @@ import { z } from 'incur'
 import * as NodePath from 'node:path'
 import * as NodeSqlite from 'node:sqlite'
 
-import type { Network } from '#network.ts'
 import { formatUnits } from '#wallet.ts'
+import type { Network } from '#network.ts'
 import { hasWallet, keysPath, loadKeystore } from '#keystore.ts'
 import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
