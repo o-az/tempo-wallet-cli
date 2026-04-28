@@ -1,30 +1,35 @@
-import { Cli } from 'incur'
+import { Cli, z } from 'incur'
 
 import {
   closeSessions,
   listSessions,
   syncSessions,
   sessionCloseArgs,
-  sessionCloseOptions,
   sessionListOptions,
-  sessionSyncOptions
+  sessionSyncOptions,
+  sessionCloseOptions
 } from '#sessions.ts'
 import { debug } from '#debug.ts'
 import { fund, fundOptions } from '#fund.ts'
 import { resolveNetwork } from '#network.ts'
-import type { GlobalOptions } from '#output.ts'
 import { services, servicesArgs, servicesOptions } from '#services.ts'
 import { login, loginOptions, logout, logoutOptions, refresh } from '#auth.ts'
+import { envSchema, globalOptionsSchema, type GlobalOptions } from '#output.ts'
 import { keys, transfer, transferArgs, transferOptions, whoami } from '#wallet.ts'
+
+const commandOutput = z.unknown()
 
 const cli = Cli.create('wallet', {
   description: 'Wallet identity and custody operations',
+  env: envSchema,
+  outputPolicy: 'agent-only',
   version: '0.0.0'
 })
 
 cli.command('login', {
   description: 'Sign up or log in to your Tempo wallet',
   options: loginOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await login(resolveNetwork(globals.network), globals, c.options)
@@ -33,6 +38,7 @@ cli.command('login', {
 
 cli.command('refresh', {
   description: 'Refresh your access key without logging out',
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await refresh(resolveNetwork(globals.network), globals)
@@ -42,6 +48,7 @@ cli.command('refresh', {
 cli.command('logout', {
   description: 'Log out and disconnect your wallet',
   options: logoutOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     resolveNetwork(globals.network)
@@ -51,6 +58,7 @@ cli.command('logout', {
 
 cli.command('whoami', {
   description: 'Show who you are: wallet, balances, keys',
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await whoami(resolveNetwork(globals.network), globals)
@@ -59,6 +67,7 @@ cli.command('whoami', {
 
 cli.command('keys', {
   description: 'List keys and their spending limits',
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await keys(resolveNetwork(globals.network), globals)
@@ -69,6 +78,7 @@ cli.command('transfer', {
   description: 'Transfer tokens to an address',
   args: transferArgs,
   options: transferOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await transfer(resolveNetwork(globals.network), globals, c)
@@ -78,6 +88,7 @@ cli.command('transfer', {
 cli.command('fund', {
   description: 'Fund your wallet (testnet faucet or mainnet bridge)',
   options: fundOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await fund(resolveNetwork(globals.network), globals, c.options)
@@ -87,6 +98,7 @@ cli.command('fund', {
 cli.command('funds', {
   description: 'Fund your wallet (testnet faucet or mainnet bridge)',
   options: fundOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await fund(resolveNetwork(globals.network), globals, c.options)
@@ -94,12 +106,14 @@ cli.command('funds', {
 })
 
 const sessionsCli = Cli.create('sessions', {
-  description: 'Manage payment sessions'
+  description: 'Manage payment sessions',
+  outputPolicy: 'agent-only'
 })
 
 sessionsCli.command('list', {
   description: 'List payment sessions',
   options: sessionListOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await listSessions(resolveNetwork(globals.network), globals, c)
@@ -109,6 +123,7 @@ sessionsCli.command('list', {
 sessionsCli.command('sync', {
   description: 'Sync local sessions with on-chain state',
   options: sessionSyncOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await syncSessions(resolveNetwork(globals.network), globals, c)
@@ -119,6 +134,7 @@ sessionsCli.command('close', {
   description: 'Close a payment session and remove it locally',
   args: sessionCloseArgs,
   options: sessionCloseOptions,
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await closeSessions(resolveNetwork(globals.network), globals, c)
@@ -131,6 +147,7 @@ cli.command('services', {
   description: 'Browse the MPP service directory',
   args: servicesArgs,
   options: servicesOptions,
+  output: commandOutput,
   async run(c) {
     return await services(getGlobals(c), c)
   }
@@ -138,6 +155,7 @@ cli.command('services', {
 
 cli.command('debug', {
   description: 'Collect debug info for support',
+  output: commandOutput,
   async run(c) {
     const globals = getGlobals(c)
     return await debug(resolveNetwork(globals.network), globals)
@@ -146,16 +164,15 @@ cli.command('debug', {
 
 const globals = parseGlobalOptions(process.argv.slice(2))
 
-try {
-  await cli.serve(globals.argv)
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
-  process.exit(1)
-}
+await cli.serve(globals.argv)
 
-function getGlobals(c: { format: string; formatExplicit: boolean }): GlobalOptions {
+export default cli
+
+function getGlobals(c: { agent: boolean; format: string; formatExplicit: boolean }): GlobalOptions {
   return {
     ...globals.options,
+    agent: c.agent,
+    env: envSchema.parse(process.env),
     format: c.format,
     formatExplicit: c.formatExplicit
   }
@@ -163,12 +180,7 @@ function getGlobals(c: { format: string; formatExplicit: boolean }): GlobalOptio
 
 function parseGlobalOptions(argv: string[]) {
   const next: string[] = []
-  const options: GlobalOptions = {
-    format: 'toon',
-    formatExplicit: false,
-    silent: false,
-    verbose: 0
-  }
+  const options = globalOptionsSchema.parse({})
 
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index]!

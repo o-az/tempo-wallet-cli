@@ -5,6 +5,8 @@ import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
 import * as NodeFS from 'node:fs/promises'
 
+import { envSchema, type TempoEnv } from '#output.ts'
+
 const keyTypeSchema = z.enum(['secp256k1', 'p256', 'webauthn'])
 const walletTypeSchema = z.enum(['local', 'passkey'])
 
@@ -33,8 +35,8 @@ export type KeyEntry = {
   keyAuthorization?: Hex.Hex | undefined
 }
 
-export function keysPath() {
-  const tempoHome = process.env.TEMPO_HOME ?? NodePath.join(NodeOS.homedir(), '.tempo')
+export function keysPath(env: Pick<TempoEnv, 'TEMPO_HOME'> = envSchema.parse(process.env)) {
+  const tempoHome = env.TEMPO_HOME ?? NodePath.join(NodeOS.homedir(), '.tempo')
   return NodePath.join(tempoHome, 'wallet', 'keys.toml')
 }
 

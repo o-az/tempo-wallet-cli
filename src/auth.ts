@@ -24,7 +24,6 @@ import type { Network } from '#network.ts'
 import { shouldRenderText, formatVerificationCode, type GlobalOptions } from '#output.ts'
 
 const callbackTimeoutMs = 15 * 60 * 1_000
-const pollIntervalMs = Number.parseInt(process.env.TEMPO_WALLET_POLL_INTERVAL_MS ?? '2000', 10)
 
 export const loginOptions = z.object({
   noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
@@ -114,7 +113,7 @@ async function loginImpl(
 }
 
 async function doLogin(network: Network, globals: GlobalOptions, noBrowser: boolean) {
-  const authServerUrl = process.env.TEMPO_AUTH_URL ?? network.authUrl
+  const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const authUrl = new URL(authServerUrl)
   const authBaseUrl = authUrl.origin
 
@@ -127,13 +126,13 @@ async function doLogin(network: Network, globals: GlobalOptions, noBrowser: bool
   const url = authUrl.toString()
 
   process.stderr.write(`Auth URL: ${url}\n`)
-  const opened = tryOpenBrowser(url, noBrowser)
+  const opened = tryOpenBrowser(url, noBrowser, globals.env)
 
   if (noBrowser) showRemoteLoginPrompt(url, code)
   else if (shouldRenderText(globals) && !globals.silent) showLoginPrompt(code)
   if (opened === 'failed') process.stderr.write(`Open this URL manually: ${url}\n`)
 
-  const callback = await pollUntilAuthorized(authBaseUrl, code, verifier)
+  const callback = await pollUntilAuthorized(authBaseUrl, code, verifier, globals)
   await saveLoginKey(network, callback, privateKey, account.address)
 }
 
@@ -164,7 +163,12 @@ async function createDeviceCode(
   throw httpError('request device code', next)
 }
 
-async function pollUntilAuthorized(baseUrl: string, code: string, codeVerifier: string) {
+async function pollUntilAuthorized(
+  baseUrl: string,
+  code: string,
+  codeVerifier: string,
+  globals: GlobalOptions
+) {
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < callbackTimeoutMs) {
@@ -190,7 +194,9 @@ async function pollUntilAuthorized(baseUrl: string, code: string, codeVerifier: 
       }
     }
 
-    await NodeTimers.setTimeout(pollIntervalMs)
+    await NodeTimers.setTimeout(
+      Number.parseInt(globals.env.TEMPO_WALLET_POLL_INTERVAL_MS ?? '2000', 10)
+    )
   }
 
   throw new Error('Login expired before authorization completed.')
@@ -269,8 +275,12 @@ function showRemoteLoginPrompt(authUrl: string, code: string) {
   process.stderr.write('Waiting for authentication...\n')
 }
 
-export function tryOpenBrowser(url: string, noBrowser: boolean) {
-  if (process.env.TEMPO_WALLET_DISABLE_BROWSER_OPEN === '1') return 'skipped'
+export function tryOpenBrowser(
+  url: string,
+  noBrowser: boolean,
+  env: Pick<GlobalOptions['env'], 'TEMPO_WALLET_DISABLE_BROWSER_OPEN'> = {}
+) {
+  if (env.TEMPO_WALLET_DISABLE_BROWSER_OPEN === '1') return 'skipped'
   if (noBrowser) return 'skipped'
   const command =
     process.platform === 'darwin'

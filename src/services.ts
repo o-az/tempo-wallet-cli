@@ -66,7 +66,7 @@ type ServicesContext = {
 }
 
 export async function services(globals: GlobalOptions, c: ServicesContext) {
-  const registry = await fetchServices()
+  const registry = await fetchServices(globals)
   const serviceId = c.args.serviceId === 'list' ? undefined : c.args.serviceId
   if (serviceId) {
     const service = registry.services.find(
@@ -78,8 +78,8 @@ export async function services(globals: GlobalOptions, c: ServicesContext) {
   return renderServiceList(globals, registry.services, c.options.search)
 }
 
-async function fetchServices(): Promise<ServiceRegistry> {
-  const response = await fetch(process.env.TEMPO_SERVICES_URL ?? servicesApiUrl, {
+async function fetchServices(globals: GlobalOptions): Promise<ServiceRegistry> {
+  const response = await fetch(globals.env.TEMPO_SERVICES_URL ?? servicesApiUrl, {
     headers: { 'user-agent': 'tempo-wallet-ts/0.0.0' }
   })
   if (!response.ok)

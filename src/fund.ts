@@ -8,9 +8,6 @@ import { shouldRenderText, type GlobalOptions } from '#output.ts'
 import { loadKeystore, keyForNetwork, normalizeAddress } from '#keystore.ts'
 import { formatUnits, chainForNetwork, type ResolvedToken } from '#wallet.ts'
 
-const pollIntervalMs = Number.parseInt(process.env.TEMPO_WALLET_FUND_POLL_INTERVAL_MS ?? '3000', 10)
-const callbackTimeoutMs = Number.parseInt(process.env.TEMPO_WALLET_FUND_TIMEOUT_MS ?? '900000', 10)
-
 const tip20Abi = parseAbi(['function balanceOf(address account) view returns (uint256)'])
 
 export const fundOptions = z.object({
@@ -22,11 +19,11 @@ type FundOptions = z.infer<typeof fundOptions>
 
 export async function fund(network: Network, globals: GlobalOptions, options: FundOptions) {
   const address = await resolveAddress(network, options.address)
-  const fundUrl = fundingUrl(network)
+  const fundUrl = fundingUrl(network, globals)
 
   if ((shouldRenderText(globals) || options.noBrowser) && !globals.silent)
     process.stderr.write(`Fund URL: ${fundUrl}\n`)
-  const opened = tryOpenBrowser(fundUrl, options.noBrowser ?? false)
+  const opened = tryOpenBrowser(fundUrl, options.noBrowser ?? false, globals.env)
   if (options.noBrowser && !globals.silent) {
     process.stderr.write(`Open this link on your device: ${fundUrl}\n`)
     process.stderr.write('After funding is complete, return here to continue.\n')
@@ -37,11 +34,19 @@ export async function fund(network: Network, globals: GlobalOptions, options: Fu
   if ((shouldRenderText(globals) || options.noBrowser) && !globals.silent)
     process.stderr.write('Waiting for funding...\n')
 
+  const callbackTimeoutMs = Number.parseInt(
+    globals.env.TEMPO_WALLET_FUND_TIMEOUT_MS ?? '900000',
+    10
+  )
   if (callbackTimeoutMs <= 0) {
     if (!globals.silent) process.stderr.write('Timed out waiting for funding after 0 minutes.\n')
-    return
+    return { address, fund_url: fundUrl, status: 'timeout' }
   }
 
+  const pollIntervalMs = Number.parseInt(
+    globals.env.TEMPO_WALLET_FUND_POLL_INTERVAL_MS ?? '3000',
+    10
+  )
   const before = await queryDefaultBalance(network, address).catch(() => undefined)
   const startedAt = Date.now()
   while (Date.now() - startedAt < callbackTimeoutMs) {
@@ -52,7 +57,7 @@ export async function fund(network: Network, globals: GlobalOptions, options: Fu
         process.stderr.write('\nFunding received!\n')
         process.stderr.write(`  ${network.token.symbol} balance: ${before ?? '0'} -> ${current}\n`)
       }
-      return
+      return { address, fund_url: fundUrl, status: 'funded' }
     }
   }
 
@@ -60,6 +65,7 @@ export async function fund(network: Network, globals: GlobalOptions, options: Fu
     process.stderr.write(
       `Timed out waiting for funding after ${Math.floor(callbackTimeoutMs / 60000)} minutes.\n`
     )
+  return { address, fund_url: fundUrl, status: 'timeout' }
 }
 
 async function resolveAddress(network: Network, input: string | undefined) {
@@ -69,8 +75,8 @@ async function resolveAddress(network: Network, input: string | undefined) {
   return normalizeAddress(key.walletAddress)
 }
 
-function fundingUrl(network: Network) {
-  const authServerUrl = process.env.TEMPO_AUTH_URL ?? network.authUrl
+function fundingUrl(network: Network, globals: GlobalOptions) {
+  const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const url = new URL(authServerUrl)
   return `${url.origin}/?action=fund`
 }
