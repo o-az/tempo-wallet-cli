@@ -2,7 +2,7 @@ import * as NodeOS from 'node:os'
 
 import { showWhoami } from '#wallet.ts'
 import type { Network } from '#network.ts'
-import { emit, type GlobalOptions } from '#output.ts'
+import { shouldRenderText, type GlobalOptions } from '#output.ts'
 import { loadKeystore, hasWallet, keyForNetwork, normalizeAddress } from '#keystore.ts'
 
 import PackageJSON from '#package.json' with { type: 'json' }
@@ -33,7 +33,7 @@ export async function debug(network: Network, globals: GlobalOptions) {
     logged_in: loggedIn
   }
 
-  if (globals.format !== 'text') return emit(globals.format, info, () => undefined)
+  if (!shouldRenderText(globals)) return info
 
   process.stdout.write(renderDebugText(info))
   if (loggedIn) {
@@ -41,6 +41,7 @@ export async function debug(network: Network, globals: GlobalOptions) {
     await showWhoami(network, globals)
   }
   process.stdout.write('\nCopy the above and share it with Tempo support.\n')
+  return undefined
 }
 
 function renderDebugText(info: DebugInfo) {

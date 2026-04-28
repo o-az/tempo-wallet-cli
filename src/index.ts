@@ -1,13 +1,21 @@
-import { Cli, z } from 'incur'
+import { Cli } from 'incur'
 
-import { fund } from '#fund.ts'
+import {
+  closeSessions,
+  listSessions,
+  syncSessions,
+  sessionCloseArgs,
+  sessionCloseOptions,
+  sessionListOptions,
+  sessionSyncOptions
+} from '#sessions.ts'
 import { debug } from '#debug.ts'
-import { services } from '#services.ts'
+import { fund, fundOptions } from '#fund.ts'
 import { resolveNetwork } from '#network.ts'
 import type { GlobalOptions } from '#output.ts'
-import { login, logout, refresh } from '#auth.ts'
-import { keys, transfer, whoami } from '#wallet.ts'
-import { closeSessions, listSessions, syncSessions } from '#sessions.ts'
+import { services, servicesArgs, servicesOptions } from '#services.ts'
+import { login, loginOptions, logout, logoutOptions, refresh } from '#auth.ts'
+import { keys, transfer, transferArgs, transferOptions, whoami } from '#wallet.ts'
 
 const cli = Cli.create('wallet', {
   description: 'Wallet identity and custody operations',
@@ -16,103 +24,72 @@ const cli = Cli.create('wallet', {
 
 cli.command('login', {
   description: 'Sign up or log in to your Tempo wallet',
-  options: z.object({
-    noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
-  }),
+  options: loginOptions,
   async run(c) {
-    const globals = getGlobals()
-    await login(resolveNetwork(globals.network), globals, {
-      noBrowser: c.options.noBrowser ?? false
-    })
+    const globals = getGlobals(c)
+    return await login(resolveNetwork(globals.network), globals, c.options)
   }
 })
 
 cli.command('refresh', {
   description: 'Refresh your access key without logging out',
-  async run() {
-    const globals = getGlobals()
-    await refresh(resolveNetwork(globals.network), globals)
+  async run(c) {
+    const globals = getGlobals(c)
+    return await refresh(resolveNetwork(globals.network), globals)
   }
 })
 
 cli.command('logout', {
   description: 'Log out and disconnect your wallet',
-  options: z.object({
-    yes: z.boolean().optional().describe('Skip confirmation prompt')
-  }),
+  options: logoutOptions,
   async run(c) {
-    const globals = getGlobals()
+    const globals = getGlobals(c)
     resolveNetwork(globals.network)
-    await logout(globals, { yes: c.options.yes ?? false })
+    return await logout(globals, c.options)
   }
 })
 
 cli.command('whoami', {
   description: 'Show who you are: wallet, balances, keys',
-  async run() {
-    const globals = getGlobals()
-    await whoami(resolveNetwork(globals.network), globals)
+  async run(c) {
+    const globals = getGlobals(c)
+    return await whoami(resolveNetwork(globals.network), globals)
   }
 })
 
 cli.command('keys', {
   description: 'List keys and their spending limits',
-  async run() {
-    const globals = getGlobals()
-    await keys(resolveNetwork(globals.network), globals)
+  async run(c) {
+    const globals = getGlobals(c)
+    return await keys(resolveNetwork(globals.network), globals)
   }
 })
 
 cli.command('transfer', {
   description: 'Transfer tokens to an address',
-  args: z.object({
-    amount: z.string().describe('Amount in human units ("1.00", "50")'),
-    token: z.string().describe('Token contract address (0x...)'),
-    to: z.string().describe('Recipient address (0x...)')
-  }),
-  options: z.object({
-    dryRun: z.boolean().optional().describe("Show plan + fee estimate, don't send"),
-    feeToken: z.string().optional().describe('Pay fees in a different token (default: same token)')
-  }),
+  args: transferArgs,
+  options: transferOptions,
   async run(c) {
-    const globals = getGlobals()
-    await transfer(resolveNetwork(globals.network), globals, {
-      amount: c.args.amount,
-      dryRun: c.options.dryRun ?? false,
-      feeToken: c.options.feeToken,
-      to: c.args.to,
-      token: c.args.token
-    })
+    const globals = getGlobals(c)
+    return await transfer(resolveNetwork(globals.network), globals, c)
   }
 })
 
 cli.command('fund', {
   description: 'Fund your wallet (testnet faucet or mainnet bridge)',
-  options: z.object({
-    address: z.string().optional().describe('Wallet address to fund (defaults to current wallet)'),
-    noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
-  }),
+  options: fundOptions,
   async run(c) {
-    const globals = getGlobals()
-    await fund(resolveNetwork(globals.network), globals, {
-      address: c.options.address,
-      noBrowser: c.options.noBrowser ?? false
-    })
+    const globals = getGlobals(c)
+    return await fund(resolveNetwork(globals.network), globals, c.options)
   }
 })
 
 cli.command('funds', {
   description: 'Fund your wallet (testnet faucet or mainnet bridge)',
-  options: z.object({
-    address: z.string().optional().describe('Wallet address to fund (defaults to current wallet)'),
-    noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
-  }),
+  options: fundOptions,
   async run(c) {
-    const globals = getGlobals()
-    await fund(resolveNetwork(globals.network), globals, {
-      address: c.options.address,
-      noBrowser: c.options.noBrowser ?? false
-    })
+    const globals = getGlobals(c)
+    return await fund(resolveNetwork(globals.network), globals, c.options)
   }
 })
 
@@ -122,69 +99,29 @@ const sessionsCli = Cli.create('sessions', {
 
 sessionsCli.command('list', {
   description: 'List payment sessions',
-  options: z.object({
-    all: z
-      .boolean()
-      .optional()
-      .describe('Include local sessions and on-chain orphaned discovery in one view'),
-    orphaned: z
-      .boolean()
-      .optional()
-      .describe('Include on-chain orphaned discovery and persist discovered channels locally')
-  }),
+  options: sessionListOptions,
   async run(c) {
-    const globals = getGlobals()
-    await listSessions(resolveNetwork(globals.network), globals, {
-      all: c.options.all ?? false,
-      orphaned: c.options.orphaned ?? false
-    })
+    const globals = getGlobals(c)
+    return await listSessions(resolveNetwork(globals.network), globals, c)
   }
 })
 
 sessionsCli.command('sync', {
   description: 'Sync local sessions with on-chain state',
-  options: z.object({
-    origin: z.string().optional().describe("Re-sync a specific origin's close state from on-chain")
-  }),
+  options: sessionSyncOptions,
   async run(c) {
-    const globals = getGlobals()
-    await syncSessions(resolveNetwork(globals.network), globals, {
-      origin: c.options.origin
-    })
+    const globals = getGlobals(c)
+    return await syncSessions(resolveNetwork(globals.network), globals, c)
   }
 })
 
 sessionsCli.command('close', {
   description: 'Close a payment session and remove it locally',
-  args: z.object({
-    url: z.string().optional().describe('URL, origin, or channel ID (0x...) to close')
-  }),
-  options: z.object({
-    all: z.boolean().optional().describe('Close all active sessions and on-chain channels'),
-    dryRun: z.boolean().optional().describe('Show what would be closed without executing'),
-    finalize: z
-      .boolean()
-      .optional()
-      .describe('Finalize channels pending close (grace period elapsed)'),
-    orphaned: z
-      .boolean()
-      .optional()
-      .describe('Close only orphaned on-chain channels (no local session)'),
-    cooperative: z
-      .boolean()
-      .optional()
-      .describe('Use cooperative close only (no on-chain fallback)')
-  }),
+  args: sessionCloseArgs,
+  options: sessionCloseOptions,
   async run(c) {
-    const globals = getGlobals()
-    await closeSessions(resolveNetwork(globals.network), globals, {
-      all: c.options.all ?? false,
-      url: c.args.url,
-      dryRun: c.options.dryRun ?? false,
-      orphaned: c.options.orphaned ?? false,
-      finalize: c.options.finalize ?? false,
-      cooperative: c.options.cooperative ?? false
-    })
+    const globals = getGlobals(c)
+    return await closeSessions(resolveNetwork(globals.network), globals, c)
   }
 })
 
@@ -192,25 +129,18 @@ cli.command(sessionsCli)
 
 cli.command('services', {
   description: 'Browse the MPP service directory',
-  args: z.object({
-    serviceId: z.string().optional().describe('Service ID to show details for')
-  }),
-  options: z.object({
-    search: z.string().optional().describe('Search by name, description, tags, or category')
-  }),
+  args: servicesArgs,
+  options: servicesOptions,
   async run(c) {
-    await services(getGlobals(), {
-      search: c.options.search,
-      serviceId: c.args.serviceId
-    })
+    return await services(getGlobals(c), c)
   }
 })
 
 cli.command('debug', {
   description: 'Collect debug info for support',
-  async run() {
-    const globals = getGlobals()
-    await debug(resolveNetwork(globals.network), globals)
+  async run(c) {
+    const globals = getGlobals(c)
+    return await debug(resolveNetwork(globals.network), globals)
   }
 })
 
@@ -223,14 +153,19 @@ try {
   process.exit(1)
 }
 
-function getGlobals(): GlobalOptions {
-  return globals.options
+function getGlobals(c: { format: string; formatExplicit: boolean }): GlobalOptions {
+  return {
+    ...globals.options,
+    format: c.format,
+    formatExplicit: c.formatExplicit
+  }
 }
 
 function parseGlobalOptions(argv: string[]) {
   const next: string[] = []
   const options: GlobalOptions = {
-    format: 'text',
+    format: 'toon',
+    formatExplicit: false,
     silent: false,
     verbose: 0
   }
@@ -238,11 +173,11 @@ function parseGlobalOptions(argv: string[]) {
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index]!
     if (token === '-j' || token === '--json-output') {
-      options.format = 'json'
+      next.push('--format', 'json')
       continue
     }
     if (token === '-t' || token === '--toon-output') {
-      options.format = 'toon'
+      next.push('--format', 'toon')
       continue
     }
     if (token === '-s' || token === '--silent') {

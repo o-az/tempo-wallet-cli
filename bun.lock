@@ -6,7 +6,6 @@
       "name": "wallet-ts",
       "dependencies": {
         "@std/ulid": "npm:@jsr/std__ulid",
-        "@toon-format/toon": "^2.1.0",
         "accounts": "^0.8.2",
         "hono": "^4.12.15",
         "incur": "^0.4.5",

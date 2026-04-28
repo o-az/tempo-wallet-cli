@@ -1,9 +1,10 @@
+import { z } from 'incur'
 import * as NodeTimers from 'node:timers/promises'
 import { createPublicClient, http, parseAbi } from 'viem'
 
 import { tryOpenBrowser } from '#auth.ts'
 import type { Network } from '#network.ts'
-import type { GlobalOptions } from '#output.ts'
+import { shouldRenderText, type GlobalOptions } from '#output.ts'
 import { loadKeystore, keyForNetwork, normalizeAddress } from '#keystore.ts'
 import { formatUnits, chainForNetwork, type ResolvedToken } from '#wallet.ts'
 
@@ -12,17 +13,20 @@ const callbackTimeoutMs = Number.parseInt(process.env.TEMPO_WALLET_FUND_TIMEOUT_
 
 const tip20Abi = parseAbi(['function balanceOf(address account) view returns (uint256)'])
 
-export async function fund(
-  network: Network,
-  globals: GlobalOptions,
-  options: { address?: string | undefined; noBrowser: boolean }
-) {
+export const fundOptions = z.object({
+  address: z.string().optional().describe('Wallet address to fund (defaults to current wallet)'),
+  noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
+})
+
+type FundOptions = z.infer<typeof fundOptions>
+
+export async function fund(network: Network, globals: GlobalOptions, options: FundOptions) {
   const address = await resolveAddress(network, options.address)
   const fundUrl = fundingUrl(network)
 
-  if ((globals.format === 'text' || options.noBrowser) && !globals.silent)
+  if ((shouldRenderText(globals) || options.noBrowser) && !globals.silent)
     process.stderr.write(`Fund URL: ${fundUrl}\n`)
-  const opened = tryOpenBrowser(fundUrl, options.noBrowser)
+  const opened = tryOpenBrowser(fundUrl, options.noBrowser ?? false)
   if (options.noBrowser && !globals.silent) {
     process.stderr.write(`Open this link on your device: ${fundUrl}\n`)
     process.stderr.write('After funding is complete, return here to continue.\n')
@@ -30,7 +34,7 @@ export async function fund(
   if (opened === 'failed' && !globals.silent)
     process.stderr.write(`Open this URL manually: ${fundUrl}\n`)
 
-  if ((globals.format === 'text' || options.noBrowser) && !globals.silent)
+  if ((shouldRenderText(globals) || options.noBrowser) && !globals.silent)
     process.stderr.write('Waiting for funding...\n')
 
   if (callbackTimeoutMs <= 0) {

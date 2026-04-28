@@ -1,10 +1,11 @@
+import { z } from 'incur'
 import * as NodePath from 'node:path'
 import * as BunSqlite from 'bun:sqlite'
 
 import { formatUnits } from '#wallet.ts'
 import type { Network } from '#network.ts'
-import { emit, type GlobalOptions } from '#output.ts'
 import { hasWallet, keysPath, loadKeystore } from '#keystore.ts'
+import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
 type ChannelRecord = {
   accepted_cumulative: string
@@ -34,63 +35,108 @@ type SessionItem = {
   last_used_at?: string | undefined
 }
 
+export const sessionListOptions = z.object({
+  all: z
+    .boolean()
+    .optional()
+    .describe('Include local sessions and on-chain orphaned discovery in one view'),
+  orphaned: z
+    .boolean()
+    .optional()
+    .describe('Include on-chain orphaned discovery and persist discovered channels locally')
+})
+
+export const sessionSyncOptions = z.object({
+  origin: z.string().optional().describe("Re-sync a specific origin's close state from on-chain")
+})
+
+export const sessionCloseArgs = z.object({
+  url: z.string().optional().describe('URL, origin, or channel ID (0x...) to close')
+})
+
+export const sessionCloseOptions = z.object({
+  all: z.boolean().optional().describe('Close all active sessions and on-chain channels'),
+  dryRun: z.boolean().optional().describe('Show what would be closed without executing'),
+  finalize: z
+    .boolean()
+    .optional()
+    .describe('Finalize channels pending close (grace period elapsed)'),
+  orphaned: z
+    .boolean()
+    .optional()
+    .describe('Close only orphaned on-chain channels (no local session)'),
+  cooperative: z.boolean().optional().describe('Use cooperative close only (no on-chain fallback)')
+})
+
+type SessionListContext = {
+  options: z.infer<typeof sessionListOptions>
+}
+
+type SessionSyncContext = {
+  options: z.infer<typeof sessionSyncOptions>
+}
+
+type SessionCloseContext = {
+  args: z.infer<typeof sessionCloseArgs>
+  options: z.infer<typeof sessionCloseOptions>
+}
+
 export async function listSessions(
   network: Network,
   globals: GlobalOptions,
-  options: { all: boolean; orphaned: boolean }
+  c: SessionListContext
 ) {
-  if (options.all || options.orphaned)
+  if (c.options.all || c.options.orphaned)
     throw new Error('On-chain orphaned session discovery is not implemented yet.')
   const sessions = loadChannelRecords()
     .filter(record => record.chain_id === network.chainId)
     .map(record => sessionItem(network, record))
     .filter(item => item.status !== 'finalized')
 
-  renderSessions(globals, sessions, 'No sessions found.', 'session(s) total')
+  return renderSessions(globals, sessions, 'No sessions found.', 'session(s) total')
 }
 
 export async function syncSessions(
   network: Network,
   globals: GlobalOptions,
-  options: { origin?: string | undefined }
+  c: SessionSyncContext
 ) {
   const sessions = loadChannelRecords()
     .filter(record => record.chain_id === network.chainId)
     .filter(
       record =>
-        !options.origin || normalizeOrigin(record.origin) === normalizeOrigin(options.origin)
+        !c.options.origin || normalizeOrigin(record.origin) === normalizeOrigin(c.options.origin)
     )
     .map(record => sessionItem(network, record))
     .filter(item => item.status !== 'finalized')
 
-  renderSessions(globals, sessions, 'No sessions found.', 'session(s) total')
+  return renderSessions(globals, sessions, 'No sessions found.', 'session(s) total')
 }
 
 export async function closeSessions(
   network: Network,
   globals: GlobalOptions,
-  options: {
-    all: boolean
-    url?: string | undefined
-    dryRun: boolean
-    orphaned: boolean
-    finalize: boolean
-    cooperative: boolean
-  }
+  c: SessionCloseContext
 ) {
-  if (options.cooperative && (options.all || options.orphaned || options.finalize))
+  if (c.options.cooperative && (c.options.all || c.options.orphaned || c.options.finalize))
     throw new Error('--cooperative cannot be combined with --all, --orphaned, or --finalize.')
-  if (options.dryRun && !options.url && !options.all && !options.orphaned && !options.finalize)
+  if (
+    c.options.dryRun &&
+    !c.args.url &&
+    !c.options.all &&
+    !c.options.orphaned &&
+    !c.options.finalize
+  )
     throw new Error('Provide a session URL/channel id, --all, --orphaned, or --finalize.')
   if (!hasWallet(await loadKeystore()))
     throw new Error("No wallet configured. Log in with 'tempo wallet login'.")
-  if (options.orphaned) throw new Error('On-chain orphaned session close is not implemented yet.')
+  if (c.options.orphaned) throw new Error('On-chain orphaned session close is not implemented yet.')
 
-  const records = selectCloseTargets(network, options)
-  if (options.dryRun) return renderDryRun(globals, records, options.url)
+  const records = selectCloseTargets(network, c)
+  if (c.options.dryRun) return renderDryRun(globals, records, c.args.url)
 
   deleteChannels(records.map(record => record.channel_id))
-  renderCloseSummary(globals, records)
+  return renderCloseSummary(globals, records)
 }
 
 function loadChannelRecords(): ChannelRecord[] {
@@ -115,18 +161,15 @@ function loadChannelRecords(): ChannelRecord[] {
   }
 }
 
-function selectCloseTargets(
-  network: Network,
-  options: { all: boolean; url?: string | undefined; finalize: boolean }
-) {
+function selectCloseTargets(network: Network, c: SessionCloseContext) {
   const records = loadChannelRecords().filter(record => record.chain_id === network.chainId)
-  if (options.finalize) return records.filter(record => statusAt(record).status === 'finalizable')
-  if (options.all) return records.filter(record => statusAt(record).status !== 'finalized')
-  if (!options.url)
+  if (c.options.finalize) return records.filter(record => statusAt(record).status === 'finalizable')
+  if (c.options.all) return records.filter(record => statusAt(record).status !== 'finalized')
+  if (!c.args.url)
     throw new Error('Provide a session URL/channel id, --all, --orphaned, or --finalize.')
-  if (options.url.toLowerCase().startsWith('0x'))
-    return records.filter(record => record.channel_id.toLowerCase() === options.url!.toLowerCase())
-  const origin = normalizeOrigin(options.url)
+  if (c.args.url.toLowerCase().startsWith('0x'))
+    return records.filter(record => record.channel_id.toLowerCase() === c.args.url!.toLowerCase())
+  const origin = normalizeOrigin(c.args.url)
   return records.filter(record => normalizeOrigin(record.origin) === origin)
 }
 
@@ -158,13 +201,14 @@ function renderSessions(
   countLabel: string
 ) {
   const response = { sessions, total: sessions.length }
-  if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
+  if (!shouldRenderText(globals)) return response
   if (sessions.length === 0) {
     process.stdout.write(`${emptyMessage}\n`)
-    return
+    return undefined
   }
   for (const session of sessions) renderSessionText(session)
   process.stdout.write(`${sessions.length} ${countLabel}.\n`)
+  return undefined
 }
 
 function renderDryRun(
@@ -183,14 +227,15 @@ function renderDryRun(
         ? [{ channel_id: '', origin: target, state: 'not found' }]
         : []
   const response = { targets }
-  if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
-  if (globals.silent) return
+  if (!shouldRenderText(globals)) return response
+  if (globals.silent) return undefined
   process.stderr.write(`[DRY RUN] Would close ${targets.length} session(s)\n`)
   for (const target of targets) {
     process.stderr.write(
       `  ${target.origin ? `${target.origin} (${target.channel_id})` : target.channel_id}\n`
     )
   }
+  return undefined
 }
 
 function renderCloseSummary(globals: GlobalOptions, records: ChannelRecord[]) {
@@ -200,11 +245,12 @@ function renderCloseSummary(globals: GlobalOptions, records: ChannelRecord[]) {
     ...(record.origin ? { origin: record.origin } : {})
   }))
   const response = { closed: results.length, failed: 0, pending: 0, results }
-  if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
-  if (globals.silent) return
+  if (!shouldRenderText(globals)) return response
+  if (globals.silent) return undefined
   process.stdout.write(
     results.length === 0 ? 'No channel to close.\n' : `${results.length} closed\n`
   )
+  return undefined
 }
 
 function renderSessionText(session: SessionItem) {

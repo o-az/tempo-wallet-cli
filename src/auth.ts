@@ -1,3 +1,4 @@
+import { z } from 'incur'
 import { Base64, Hash, Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
 import * as NodeTimers from 'node:timers/promises'
@@ -20,16 +21,23 @@ import {
 } from '#keystore.ts'
 import { showWhoami } from '#wallet.ts'
 import type { Network } from '#network.ts'
-import { emit, formatVerificationCode, type GlobalOptions } from '#output.ts'
+import { shouldRenderText, formatVerificationCode, type GlobalOptions } from '#output.ts'
 
 const callbackTimeoutMs = 15 * 60 * 1_000
 const pollIntervalMs = Number.parseInt(process.env.TEMPO_WALLET_POLL_INTERVAL_MS ?? '2000', 10)
 
-export async function login(
-  network: Network,
-  globals: GlobalOptions,
-  options: { noBrowser: boolean }
-) {
+export const loginOptions = z.object({
+  noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
+})
+
+export const logoutOptions = z.object({
+  yes: z.boolean().optional().describe('Skip confirmation prompt')
+})
+
+type LoginOptions = z.infer<typeof loginOptions>
+type LogoutOptions = z.infer<typeof logoutOptions>
+
+export async function login(network: Network, globals: GlobalOptions, options: LoginOptions) {
   await loginImpl(network, globals, { forceReauth: false, noBrowser: options.noBrowser })
 }
 
@@ -37,39 +45,36 @@ export async function refresh(network: Network, globals: GlobalOptions) {
   await loginImpl(network, globals, { forceReauth: true, noBrowser: false })
 }
 
-export async function logout(globals: GlobalOptions, options: { yes: boolean }) {
+export async function logout(globals: GlobalOptions, options: LogoutOptions) {
   const keys = await loadKeystore()
   const passkey = findPasskeyWallet(keys)
 
   if (!passkey) {
-    emit(
-      globals.format,
-      { logged_in: false, disconnected: false, message: 'not logged in' },
-      () => 'Not logged in.\n'
-    )
-    return
+    const response = { logged_in: false, disconnected: false, message: 'not logged in' }
+    if (!shouldRenderText(globals)) return response
+    process.stderr.write('Not logged in.\n')
+    return undefined
   }
 
   const wallet = normalizeAddress(passkey.walletAddress)
-  if (!options.yes && !confirm(`Disconnect wallet ${shortAddress(wallet)}?`))
-    return emit(
-      globals.format,
-      { logged_in: true, disconnected: false, wallet, message: 'cancelled' },
-      () => 'Cancelled.\n'
-    )
+  if (!options.yes && !confirm(`Disconnect wallet ${shortAddress(wallet)}?`)) {
+    const response = { logged_in: true, disconnected: false, wallet, message: 'cancelled' }
+    if (!shouldRenderText(globals)) return response
+    process.stderr.write('Cancelled.\n')
+    return undefined
+  }
 
   await saveKeystore(deletePasskeyWalletAddress(keys, wallet))
-  emit(
-    globals.format,
-    { logged_in: true, disconnected: true, wallet, message: 'wallet disconnected' },
-    () => 'Wallet disconnected.\n'
-  )
+  const response = { logged_in: true, disconnected: true, wallet, message: 'wallet disconnected' }
+  if (!shouldRenderText(globals)) return response
+  process.stderr.write('Wallet disconnected.\n')
+  return undefined
 }
 
 async function loginImpl(
   network: Network,
   globals: GlobalOptions,
-  options: { forceReauth: boolean; noBrowser: boolean }
+  options: LoginOptions & { forceReauth: boolean }
 ) {
   const keys = await loadKeystore()
   const alreadyLoggedIn = hasKeyForNetwork(keys, network.chainId)
@@ -82,30 +87,30 @@ async function loginImpl(
     if (entry) {
       staleBackup = keys
       await saveKeystore(deletePasskeyWalletAddress(keys, entry.walletAddress))
-      if (globals.format === 'text') process.stderr.write('Refreshing access key...\n')
+      if (shouldRenderText(globals)) process.stderr.write('Refreshing access key...\n')
     }
   }
 
   if (!alreadyLoggedIn || options.forceReauth) {
     try {
-      await doLogin(network, globals, options.noBrowser)
+      await doLogin(network, globals, options.noBrowser ?? false)
     } catch (error) {
       if (staleBackup) {
         await saveKeystore(staleBackup)
-        if (globals.format === 'text')
+        if (shouldRenderText(globals))
           process.stderr.write('Access key refresh failed. Restored previous access key.\n')
       }
       throw error
     }
   }
 
-  if (globals.format === 'text' && !globals.silent) {
+  if (shouldRenderText(globals) && !globals.silent) {
     if (options.forceReauth && alreadyLoggedIn) process.stderr.write('\nAccess key refreshed!\n\n')
     else if (alreadyLoggedIn) process.stderr.write('Already logged in.\n\n')
     else process.stderr.write('\nWallet connected!\n\n')
   }
 
-  await showWhoami(network, globals)
+  return await showWhoami(network, globals)
 }
 
 async function doLogin(network: Network, globals: GlobalOptions, noBrowser: boolean) {
@@ -125,7 +130,7 @@ async function doLogin(network: Network, globals: GlobalOptions, noBrowser: bool
   const opened = tryOpenBrowser(url, noBrowser)
 
   if (noBrowser) showRemoteLoginPrompt(url, code)
-  else if (globals.format === 'text' && !globals.silent) showLoginPrompt(code)
+  else if (shouldRenderText(globals) && !globals.silent) showLoginPrompt(code)
   if (opened === 'failed') process.stderr.write(`Open this URL manually: ${url}\n`)
 
   const callback = await pollUntilAuthorized(authBaseUrl, code, verifier)

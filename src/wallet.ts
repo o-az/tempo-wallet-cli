@@ -1,3 +1,4 @@
+import { z } from 'incur'
 import { KeyAuthorization } from 'ox/tempo'
 import { Account, Actions } from 'viem/tempo'
 import { tempo, tempoModerato } from 'viem/chains'
@@ -10,8 +11,8 @@ import {
   keyForNetwork,
   normalizeAddress
 } from '#keystore.ts'
-import { emit, type GlobalOptions } from '#output.ts'
 import { networkFromChainId, type Network } from '#network.ts'
+import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
 const tip20Abi = parseAbi([
   'function balanceOf(address account) view returns (uint256)',
@@ -56,8 +57,24 @@ type WhoamiResponse = {
   wallet?: string | undefined
 }
 
+export const transferArgs = z.object({
+  amount: z.string().describe('Amount in human units ("1.00", "50")'),
+  token: z.string().describe('Token contract address (0x...)'),
+  to: z.string().describe('Recipient address (0x...)')
+})
+
+export const transferOptions = z.object({
+  dryRun: z.boolean().optional().describe("Show plan + fee estimate, don't send"),
+  feeToken: z.string().optional().describe('Pay fees in a different token (default: same token)')
+})
+
+type TransferContext = {
+  args: z.infer<typeof transferArgs>
+  options: z.infer<typeof transferOptions>
+}
+
 export async function whoami(network: Network, globals: GlobalOptions) {
-  await showWhoami(network, globals)
+  return await showWhoami(network, globals)
 }
 
 export async function keys(network: Network, globals: GlobalOptions) {
@@ -69,10 +86,10 @@ export async function keys(network: Network, globals: GlobalOptions) {
     total: entries.length
   }
 
-  if (globals.format === 'text') {
+  if (shouldRenderText(globals)) {
     if (response.keys.length === 0) {
       process.stdout.write('No keys configured.\n')
-      return
+      return undefined
     }
     const chunks = response.keys.map((key, index) => {
       const entry = entries[index]!
@@ -87,10 +104,10 @@ export async function keys(network: Network, globals: GlobalOptions) {
       return lines.filter(Boolean).join('\n')
     })
     process.stdout.write(`${chunks.join('\n\n')}\n\n${response.keys.length} key(s) total.\n`)
-    return
+    return undefined
   }
 
-  emit(globals.format, response, () => undefined)
+  return response
 }
 
 export async function showWhoami(network: Network, globals: GlobalOptions) {
@@ -98,11 +115,11 @@ export async function showWhoami(network: Network, globals: GlobalOptions) {
   const key = keyForNetwork(entries, network.chainId)
   const response = await buildWhoamiResponse(network, entries, key)
 
-  if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
+  if (!shouldRenderText(globals)) return response
 
   if (!key || !response.wallet) {
     process.stdout.write('Not logged in. Run `tempo wallet login` to get started.\n')
-    return
+    return undefined
   }
 
   const lines = [field('Wallet', response.wallet)]
@@ -128,30 +145,21 @@ export async function showWhoami(network: Network, globals: GlobalOptions) {
     if (response.key.spending_limit) lines.push(formatLimit(response.key))
   }
   process.stdout.write(`${lines.join('\n')}\n`)
+  return undefined
 }
 
-export async function transfer(
-  network: Network,
-  globals: GlobalOptions,
-  args: {
-    amount: string
-    feeToken?: string | undefined
-    dryRun: boolean
-    to: string
-    token: string
-  }
-) {
+export async function transfer(network: Network, globals: GlobalOptions, c: TransferContext) {
   const entries = await loadKeystore()
   const entry = requireNetworkKey(entries, network)
-  const to = normalizeAddress(args.to)
-  const token = await resolveToken(network, args.token)
-  const amount = resolveAmount(args.amount, token)
-  const feeToken = args.feeToken ? normalizeAddress(args.feeToken) : token.address
+  const to = normalizeAddress(c.args.to)
+  const token = await resolveToken(network, c.args.token)
+  const amount = resolveAmount(c.args.amount, token)
+  const feeToken = c.options.feeToken ? normalizeAddress(c.options.feeToken) : token.address
   const from = normalizeAddress(entry.walletAddress)
 
-  if (args.dryRun) {
+  if (c.options.dryRun) {
     const response = transferResponse({
-      amount: args.amount,
+      amount: c.args.amount,
       chainId: network.chainId,
       from,
       status: 'dry_run',
@@ -159,18 +167,20 @@ export async function transfer(
       to,
       token: token.address
     })
-    return emit(globals.format, response, () =>
+    if (!shouldRenderText(globals)) return response
+    process.stderr.write(
       [
         '[DRY RUN]\n',
-        `  Sending ${args.amount} ${token.symbol} -> ${shortAddress(to)}\n`,
+        `  Sending ${c.args.amount} ${token.symbol} -> ${shortAddress(to)}\n`,
         `  From: ${shortAddress(from)}\n`,
         `  Fee token: ${feeToken}\n`
       ].join('')
     )
+    return undefined
   }
 
-  if (globals.format === 'text')
-    process.stderr.write(`  Sending ${args.amount} ${token.symbol} -> ${shortAddress(to)}\n`)
+  if (shouldRenderText(globals))
+    process.stderr.write(`  Sending ${c.args.amount} ${token.symbol} -> ${shortAddress(to)}\n`)
 
   const client = createWalletClient({
     account: accountForEntry(entry),
@@ -199,7 +209,7 @@ export async function transfer(
   )
 
   const response = transferResponse({
-    amount: args.amount,
+    amount: c.args.amount,
     chainId: network.chainId,
     from,
     status: 'success',
@@ -209,11 +219,9 @@ export async function transfer(
     txHash
   })
 
-  emit(
-    globals.format,
-    response,
-    () => `\n  Submitted\n    TX: ${txHash}\n    ${txUrl(network, txHash)}\n`
-  )
+  if (!shouldRenderText(globals)) return response
+  process.stderr.write(`\n  Submitted\n    TX: ${txHash}\n    ${txUrl(network, txHash)}\n`)
+  return undefined
 }
 
 async function buildWhoamiResponse(

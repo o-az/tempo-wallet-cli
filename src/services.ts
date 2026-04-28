@@ -1,4 +1,6 @@
-import { emit, type GlobalOptions } from '#output.ts'
+import { z } from 'incur'
+
+import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
 const servicesApiUrl = 'https://mpp.sh/api/services'
 
@@ -46,12 +48,22 @@ type EndpointPayment = {
   dynamic?: boolean | undefined
 }
 
-export async function services(
-  globals: GlobalOptions,
-  args: { serviceId?: string | undefined; search?: string | undefined }
-) {
+export const servicesArgs = z.object({
+  serviceId: z.string().optional().describe('Service ID to show details for')
+})
+
+export const servicesOptions = z.object({
+  search: z.string().optional().describe('Search by name, description, tags, or category')
+})
+
+type ServicesContext = {
+  args: z.infer<typeof servicesArgs>
+  options: z.infer<typeof servicesOptions>
+}
+
+export async function services(globals: GlobalOptions, c: ServicesContext) {
   const registry = await fetchServices()
-  const serviceId = args.serviceId === 'list' ? undefined : args.serviceId
+  const serviceId = c.args.serviceId === 'list' ? undefined : c.args.serviceId
   if (serviceId) {
     const service = registry.services.find(
       service => service.id.toLowerCase() === serviceId.trim().toLowerCase()
@@ -59,7 +71,7 @@ export async function services(
     if (!service) throw new Error(`service '${serviceId}' not found`)
     return renderServiceDetail(globals, service)
   }
-  renderServiceList(globals, registry.services, args.search)
+  return renderServiceList(globals, registry.services, c.options.search)
 }
 
 async function fetchServices(): Promise<ServiceRegistry> {
@@ -89,12 +101,13 @@ function renderServiceList(
     tags: service.tags ?? [],
     endpoint_count: service.endpoints?.length ?? 0
   }))
-  if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
+  if (!shouldRenderText(globals)) return response
   if (response.length === 0) {
     process.stdout.write('No services found.\n')
-    return
+    return undefined
   }
   process.stdout.write(renderServiceTable(response))
+  return undefined
 }
 
 function renderServiceDetail(globals: GlobalOptions, service: Service) {
@@ -115,8 +128,9 @@ function renderServiceDetail(globals: GlobalOptions, service: Service) {
       docs: endpoint.docs
     }))
   }
-  if (globals.format !== 'text') return emit(globals.format, detail, () => undefined)
+  if (!shouldRenderText(globals)) return detail
   process.stdout.write(renderServiceDetailText(service))
+  return undefined
 }
 
 function filterServices(services: Service[], search: string | undefined) {
