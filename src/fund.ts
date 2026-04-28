@@ -78,21 +78,25 @@ async function resolveAddress(network: Network, input: string | undefined) {
 function fundingUrl(network: Network, globals: GlobalOptions, address: ResolvedToken['address']) {
   const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const url = new URL(authServerUrl)
+  if (!globals.env.TEMPO_AUTH_URL && url.hostname === 'wallet-next.moderato.tempo.xyz')
+    url.hostname = 'wallet-next.tempo.xyz'
+
   url.pathname = '/remote/rpc/wallet_deposit'
   url.search = ''
-  url.searchParams.set('jsonrpc', '2.0')
+  const params = [
+    {
+      address,
+      chainId: network.chainId,
+      displayName: 'Tempo CLI'
+    }
+  ]
+  const decoded = { method: 'wallet_deposit', params }
+  if (network.name === 'tempo-moderato') url.searchParams.set('testnet', 'true')
+  url.searchParams.set('jsonrpc', JSON.stringify('2.0'))
   url.searchParams.set('id', '1')
-  url.searchParams.set('method', 'wallet_deposit')
-  url.searchParams.set(
-    'params',
-    JSON.stringify([
-      {
-        address,
-        chainId: network.chainId,
-        displayName: 'Tempo CLI'
-      }
-    ])
-  )
+  url.searchParams.set('method', JSON.stringify('wallet_deposit'))
+  url.searchParams.set('params', JSON.stringify(params))
+  url.searchParams.set('_decoded', JSON.stringify(decoded))
   return url.toString()
 }
 

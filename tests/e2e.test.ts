@@ -303,9 +303,32 @@ test('fund prints the auth funding URL and respects explicit address', async () 
   expect(result.stderr).toContain(
     `Open this link on your device: ${server.url}/remote/rpc/wallet_deposit?`
   )
-  expect(result.stderr).toContain('method=wallet_deposit')
-  expect(result.stderr).toContain(encodeURIComponent(wallet))
-  expect(result.stderr).toContain('chainId')
+  const url = new URL(result.stderr.match(/Fund URL: (.+)/)?.[1] ?? '')
+  expect(JSON.parse(url.searchParams.get('method') ?? 'null')).toBe('wallet_deposit')
+  expect(JSON.parse(url.searchParams.get('params') ?? 'null')).toEqual([
+    { address: wallet, chainId: 4217, displayName: 'Tempo CLI' }
+  ])
+  expect(JSON.parse(url.searchParams.get('_decoded') ?? 'null')).toEqual({
+    method: 'wallet_deposit',
+    params: [{ address: wallet, chainId: 4217, displayName: 'Tempo CLI' }]
+  })
+  expect(url.searchParams.has('testnet')).toBe(false)
+})
+
+test('fund marks wallet-next deposit links as testnet on testnet', async () => {
+  const result = await runWallet(
+    ['--network', 'testnet', 'fund', '--address', wallet, '--no-browser'],
+    {
+      TEMPO_WALLET_FUND_TIMEOUT_MS: '0'
+    }
+  )
+
+  expect(result.exitCode).toBe(0)
+  const url = new URL(result.stderr.match(/Fund URL: (.+)/)?.[1] ?? '')
+  expect(url.searchParams.get('testnet')).toBe('true')
+  expect(JSON.parse(url.searchParams.get('params') ?? 'null')).toEqual([
+    { address: wallet, chainId: 42431, displayName: 'Tempo CLI' }
+  ])
 })
 
 test('sessions list and sync report empty local session state', async () => {
