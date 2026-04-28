@@ -8,7 +8,11 @@ import { Account } from 'viem/tempo'
 
 import {
   createSecureEnclaveIdentity,
+  indexStoredWallet,
   keychainReference,
+  loadKeychainSecret,
+  listSecureEnclaveIdentities,
+  listStoredWalletIndex,
   platformHardwareStorage,
   platformSecretStorage,
   storeKeychainSecret
@@ -28,7 +32,7 @@ import {
   deletePasskeyWalletAddress
 } from '#keystore.ts'
 import { showWhoami } from '#wallet.ts'
-import type { Network } from '#network.ts'
+import { networkFromChainId, networks, type Network } from '#network.ts'
 import { shouldRenderText, formatVerificationCode, type GlobalOptions } from '#output.ts'
 
 const callbackTimeoutMs = 15 * 60 * 1_000
@@ -45,11 +49,24 @@ export const initOptions = z.object({
     .describe('Create a non-exportable hardware-backed root wallet')
 })
 
+export const importOptions = z.object({
+  address: z.string().optional().describe('Import a discoverable wallet by address'),
+  force: z.boolean().optional().describe('Overwrite the local wallet for this network'),
+  privateKey: z.string().optional().describe('Import an exportable root private key')
+})
+
+export const listOptions = z.object({
+  imported: z.boolean().optional().describe('Only show imported wallets'),
+  walletType: z.enum(['hardware', 'local', 'passkey']).optional().describe('Filter wallet type')
+})
+
 export const logoutOptions = z.object({
   yes: z.boolean().optional().describe('Skip confirmation prompt')
 })
 
 type InitOptions = z.infer<typeof initOptions>
+type ImportOptions = z.infer<typeof importOptions>
+type ListOptions = z.infer<typeof listOptions>
 type LoginOptions = z.infer<typeof loginOptions>
 type LogoutOptions = z.infer<typeof logoutOptions>
 type InitResult = {
@@ -58,6 +75,14 @@ type InitResult = {
   hardwareEncryptionStatus?: string | undefined
   secretStorageProvider: string
   secretStorageStatus: string
+}
+
+type WalletListItem = {
+  address: string
+  imported: boolean
+  network: string
+  storage: string
+  wallet_type: 'hardware' | 'local' | 'passkey'
 }
 
 export async function login(network: Network, globals: GlobalOptions, options: LoginOptions) {
@@ -139,6 +164,83 @@ export async function init(network: Network, globals: GlobalOptions, options: In
   return undefined
 }
 
+export async function importWallet(
+  network: Network,
+  globals: GlobalOptions,
+  options: ImportOptions
+) {
+  if (options.privateKey && options.address)
+    throw new Error('Use either --private-key or --address, not both.')
+  if (!options.privateKey && !options.address)
+    throw new Error(
+      'Use --private-key to import a raw key or --address to import a discoverable wallet.'
+    )
+
+  const keys = await loadKeystore()
+  const entry = options.privateKey
+    ? await importPrivateKey(network, options.privateKey)
+    : await importDiscoverableAddress(network, options.address!)
+  const entryNetwork = networkFromChainId(entry.chainId) ?? network
+  const existing = keyForNetwork(keys, entry.chainId)
+  if (
+    existing &&
+    !options.force &&
+    normalizeAddress(existing.walletAddress) !== entry.walletAddress
+  )
+    throw new Error(
+      `A wallet already exists for '${entryNetwork.name}'. Use --force to replace it or run 'tempo wallet whoami'.`
+    )
+
+  await saveKeystore([...keys.filter(key => key.chainId !== entry.chainId), entry])
+  const response = {
+    address: entry.walletAddress,
+    chain_id: entry.chainId,
+    imported: true,
+    key_address: entry.keyAddress,
+    network: entryNetwork.name,
+    storage: storageForEntry(entry),
+    wallet_type: walletTypeForEntry(entry)
+  }
+  if (!shouldRenderText(globals)) return response
+
+  process.stdout.write(`Imported: ${response.address}\n`)
+  process.stdout.write(`Network: ${displayNetworkName(entry.chainId)}\n`)
+  process.stdout.write(`Storage: ${response.storage}\n`)
+  process.stdout.write(`Type: ${response.wallet_type}\n`)
+  return undefined
+}
+
+export async function listWallets(globals: GlobalOptions, options: ListOptions) {
+  const keys = await loadKeystore()
+  const selectedNetworks = globals.network
+    ? [resolveNetworkForList(globals.network)]
+    : Object.values(networks)
+  const rows = filterWalletList(
+    dedupeWalletList([
+      ...keys.map(entryToWalletListItem),
+      ...(await indexedWalletListItems(keys)),
+      ...(await hardwareWalletListItems(keys, selectedNetworks))
+    ]),
+    options
+  )
+  const response = { total: rows.length, wallets: rows }
+  if (!shouldRenderText(globals)) return response
+
+  if (rows.length === 0) {
+    process.stdout.write('No wallets found.\n')
+    return undefined
+  }
+  process.stdout.write(
+    `${pad('Address', 44)}  ${pad('Network', 8)}  ${pad('Type', 8)}  ${pad('Storage', 24)}  Imported\n`
+  )
+  for (const row of rows) {
+    process.stdout.write(
+      `${pad(row.address, 44)}  ${pad(row.network, 8)}  ${pad(row.wallet_type, 8)}  ${pad(row.storage, 24)}  ${row.imported ? 'yes' : 'no'}\n`
+    )
+  }
+  return undefined
+}
+
 function hardwareSync(status: string) {
   return status === 'active' ? 'device_only' : 'local_file'
 }
@@ -152,24 +254,38 @@ function storageSync(storage: string) {
 async function createExportableRootEntry(network: Network): Promise<InitResult> {
   const secretStorage = platformSecretStorage()
   const privateKey = generatePrivateKey()
+  const entry = await createPrivateKeyRootEntry(network, privateKey)
+  return {
+    entry,
+    secretStorageProvider: secretStorage.provider,
+    secretStorageStatus: entry.keyReference ? secretStorage.status : 'unsupported_noop'
+  }
+}
+
+async function createPrivateKeyRootEntry(network: Network, privateKey: Hex.Hex): Promise<KeyEntry> {
+  const secretStorage = platformSecretStorage()
   const account = Account.fromSecp256k1(privateKey)
   const walletAddress = normalizeAddress(account.address)
   const reference = keychainReference(network.chainId, walletAddress)
   const storedInKeychain = await storeKeychainSecret(reference, privateKey)
-  return {
-    entry: {
+  if (storedInKeychain)
+    await indexStoredWallet({
+      address: walletAddress,
       chainId: network.chainId,
-      ...(storedInKeychain
-        ? { keyReference: reference, keyStorage: 'keychain' }
-        : { key: privateKey }),
-      keyAddress: walletAddress,
-      keyType: 'secp256k1',
-      limits: [],
-      walletAddress,
-      walletType: 'local'
-    },
-    secretStorageProvider: secretStorage.provider,
-    secretStorageStatus: storedInKeychain ? secretStorage.status : 'unsupported_noop'
+      provider: secretStorage.provider,
+      reference,
+      type: 'local'
+    })
+  return {
+    chainId: network.chainId,
+    ...(storedInKeychain
+      ? { keyReference: reference, keyStorage: 'keychain' }
+      : { key: privateKey }),
+    keyAddress: walletAddress,
+    keyType: 'secp256k1',
+    limits: [],
+    walletAddress,
+    walletType: 'local'
   }
 }
 
@@ -204,6 +320,152 @@ async function createHardwareRootEntry(network: Network): Promise<InitResult> {
     secretStorageProvider: platformSecretStorage().provider,
     secretStorageStatus: 'not_used'
   }
+}
+
+async function importPrivateKey(network: Network, privateKeyInput: string) {
+  const privateKey = hexSchema.parse(privateKeyInput)
+  if (Hex.size(privateKey) !== 32) throw new Error('Expected a 32-byte private key.')
+  return await createPrivateKeyRootEntry(network, privateKey)
+}
+
+async function importDiscoverableAddress(network: Network, addressInput: string) {
+  const address = normalizeAddress(addressInput)
+  const hardware = await listSecureEnclaveIdentities()
+  const identity = hardware.find(identity => identity.address === address)
+  if (identity) {
+    return {
+      chainId: network.chainId,
+      keyAddress: address,
+      keyStorage: 'secure-enclave',
+      keyStorageHash: identity.hash,
+      keyStorageLabel: identity.label,
+      keyType: 'p256',
+      limits: [],
+      walletAddress: address,
+      walletType: 'local'
+    } satisfies KeyEntry
+  }
+
+  const indexedWallets = (await listStoredWalletIndex()).filter(item => item.address === address)
+  const indexed = indexedWallets.find(item => item.chainId === network.chainId) ?? indexedWallets[0]
+  if (indexed?.type === 'local') {
+    const indexedNetwork = networkFromChainId(indexed.chainId) ?? network
+    const privateKey = hexSchema.parse(await loadIndexedPrivateKey(indexed.reference))
+    return await createPrivateKeyRootEntry(indexedNetwork, privateKey)
+  }
+
+  throw new Error(`No discoverable Tempo wallet found for address '${address}'.`)
+}
+
+async function loadIndexedPrivateKey(reference: string) {
+  return await loadKeychainSecret(reference)
+}
+
+function entryToWalletListItem(entry: KeyEntry): WalletListItem {
+  return {
+    address: normalizeAddress(entry.walletAddress),
+    imported: true,
+    network: displayNetworkName(entry.chainId),
+    storage: storageForEntry(entry),
+    wallet_type: walletTypeForEntry(entry)
+  }
+}
+
+async function indexedWalletListItems(keys: readonly KeyEntry[]) {
+  return (await listStoredWalletIndex()).map(
+    (item): WalletListItem => ({
+      address: item.address,
+      imported: keys.some(
+        key => key.chainId === item.chainId && normalizeAddress(key.walletAddress) === item.address
+      ),
+      network: displayNetworkName(item.chainId),
+      storage: item.provider,
+      wallet_type: item.type === 'hardware' ? 'hardware' : 'local'
+    })
+  )
+}
+
+async function hardwareWalletListItems(
+  keys: readonly KeyEntry[],
+  selectedNetworks: readonly Network[]
+) {
+  const storage = platformHardwareStorage().provider
+  return (await listSecureEnclaveIdentities()).flatMap(identity => {
+    const labelNetwork = networkFromHardwareLabel(identity.label)
+    const networks = labelNetwork ? [labelNetwork] : selectedNetworks
+    return networks.map(
+      (network): WalletListItem => ({
+        address: identity.address,
+        imported: keys.some(
+          key =>
+            key.chainId === network.chainId &&
+            normalizeAddress(key.walletAddress) === identity.address &&
+            key.keyStorage === 'secure-enclave'
+        ),
+        network: displayNetworkName(network.chainId),
+        storage,
+        wallet_type: 'hardware'
+      })
+    )
+  })
+}
+
+function dedupeWalletList(rows: WalletListItem[]) {
+  const map = new Map<string, WalletListItem>()
+  for (const row of rows) {
+    const key = `${row.address}:${row.network}:${row.wallet_type}:${row.storage}`
+    const existing = map.get(key)
+    map.set(key, existing ? { ...row, imported: existing.imported || row.imported } : row)
+  }
+  return [...map.values()].sort((a, b) =>
+    `${a.network}:${a.wallet_type}:${a.address}`.localeCompare(
+      `${b.network}:${b.wallet_type}:${b.address}`
+    )
+  )
+}
+
+function filterWalletList(rows: WalletListItem[], options: ListOptions) {
+  return rows.filter(row => {
+    if (options.walletType && row.wallet_type !== options.walletType) return false
+    if (options.imported && !row.imported) return false
+    return true
+  })
+}
+
+function storageForEntry(entry: KeyEntry) {
+  if (entry.keyStorage === 'secure-enclave') return platformHardwareStorage().provider
+  if (entry.keyStorage === 'keychain') return platformSecretStorage().provider
+  return 'local-file'
+}
+
+function walletTypeForEntry(entry: KeyEntry): WalletListItem['wallet_type'] {
+  if (entry.keyStorage === 'secure-enclave') return 'hardware'
+  if (entry.walletType === 'passkey') return 'passkey'
+  return 'local'
+}
+
+function networkFromHardwareLabel(label: string) {
+  if (label.startsWith('tempo_wallet_tempo-moderato_')) return networks['tempo-moderato']
+  if (label.startsWith('tempo_wallet_tempo_')) return networks.tempo
+  return undefined
+}
+
+function resolveNetworkForList(value: string) {
+  if (value.trim().toLowerCase() === 'testnet') return networks['tempo-moderato']
+  if (value.trim().toLowerCase() === 'moderato') return networks['tempo-moderato']
+  if (value.trim().toLowerCase() === 'tempo-moderato') return networks['tempo-moderato']
+  return networks.tempo
+}
+
+function displayNetworkName(chainId: number) {
+  const network = networkFromChainId(chainId)
+  if (network?.name === 'tempo') return 'mainnet'
+  if (network?.name === 'tempo-moderato') return 'testnet'
+  return String(chainId)
+}
+
+function pad(value: string, width: number) {
+  return value.length >= width ? value : value.padEnd(width)
 }
 
 export async function refresh(network: Network, globals: GlobalOptions) {

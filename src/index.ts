@@ -13,7 +13,19 @@ import { debug } from '#debug.ts'
 import { fund, fundOptions } from '#fund.ts'
 import { resolveNetwork } from '#network.ts'
 import { services, servicesArgs, servicesOptions } from '#services.ts'
-import { init, login, initOptions, logout, refresh, logoutOptions, loginOptions } from '#auth.ts'
+import {
+  importOptions,
+  importWallet,
+  init,
+  login,
+  initOptions,
+  listOptions,
+  listWallets,
+  logout,
+  refresh,
+  logoutOptions,
+  loginOptions
+} from '#auth.ts'
 import { envSchema, globalOptionsSchema, type GlobalOptions } from '#output.ts'
 import {
   createKey,
@@ -51,6 +63,25 @@ cli.command('init', {
   async run(c) {
     const globals = getGlobals(c)
     return await init(resolveNetwork(globals.network), globals, c.options)
+  }
+})
+
+cli.command('import', {
+  description: 'Import a local or discoverable Tempo wallet',
+  options: importOptions,
+  output: commandOutput,
+  async run(c) {
+    const globals = getGlobals(c)
+    return await importWallet(resolveNetwork(globals.network), globals, c.options)
+  }
+})
+
+cli.command('list', {
+  description: 'List imported and discoverable wallets',
+  options: listOptions,
+  output: commandOutput,
+  async run(c) {
+    return await listWallets(getGlobals(c), c.options)
   }
 })
 
@@ -265,6 +296,22 @@ function parseGlobalOptions(argv: string[]) {
     }
     if (token.startsWith('--fee-token=')) {
       next.push(`--feeToken=${token.slice('--fee-token='.length)}`)
+      continue
+    }
+    if (token === '--private-key') {
+      next.push('--privateKey')
+      continue
+    }
+    if (token.startsWith('--private-key=')) {
+      next.push(`--privateKey=${token.slice('--private-key='.length)}`)
+      continue
+    }
+    if (token === '--wallet-type') {
+      next.push('--walletType')
+      continue
+    }
+    if (token.startsWith('--wallet-type=')) {
+      next.push(`--walletType=${token.slice('--wallet-type='.length)}`)
       continue
     }
     next.push(token)

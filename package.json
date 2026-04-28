@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "tempo": "./src/index.ts"
+  },
   "imports": {
     "#*": "./src/*",
     "#package.json": "./package.json"

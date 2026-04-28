@@ -29,6 +29,14 @@ type SecureEnclaveIdentity = {
   publicKey: Hex.Hex
 }
 
+export type StoredWalletIndexEntry = {
+  address: Address.Address
+  chainId: number
+  provider: string
+  reference: string
+  type: 'hardware' | 'local'
+}
+
 type SecureEnclaveSignature = {
   publicKey: Hex.Hex
   signature: {
@@ -118,6 +126,51 @@ export async function storeKeychainSecret(reference: string, value: string) {
   return true
 }
 
+export async function indexStoredWallet(entry: StoredWalletIndexEntry) {
+  if (!supportsKeychain()) return false
+  const index = await listStoredWalletIndex()
+  const next = [
+    ...index.filter(
+      item => !(item.chainId === entry.chainId && Address.isEqual(item.address, entry.address))
+    ),
+    entry
+  ]
+  await storeKeychainSecret('wallet_index', JSON.stringify(next))
+  return true
+}
+
+export async function listStoredWalletIndex(): Promise<StoredWalletIndexEntry[]> {
+  if (!supportsKeychain()) return []
+  try {
+    const raw = await loadKeychainSecret('wallet_index')
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((item): StoredWalletIndexEntry[] => {
+      if (!isRecord(item)) return []
+      if (
+        typeof item.address !== 'string' ||
+        typeof item.chainId !== 'number' ||
+        typeof item.provider !== 'string' ||
+        typeof item.reference !== 'string' ||
+        (item.type !== 'hardware' && item.type !== 'local') ||
+        !Address.validate(item.address)
+      )
+        return []
+      return [
+        {
+          address: Address.from(Address.checksum(item.address).toLowerCase()),
+          chainId: item.chainId,
+          provider: item.provider,
+          reference: item.reference,
+          type: item.type
+        }
+      ]
+    })
+  } catch {
+    return []
+  }
+}
+
 export async function loadKeychainSecret(reference: string) {
   if (!supportsKeychain()) throw new Error('Keychain storage is only supported on macOS.')
   const result = runSecurity([
@@ -129,6 +182,39 @@ export async function loadKeychainSecret(reference: string) {
     '-w'
   ])
   return result.stdout.trim()
+}
+
+export async function listSecureEnclaveIdentities(): Promise<SecureEnclaveIdentity[]> {
+  if (process.platform !== 'darwin') return []
+  const result = runCommand('swift', [
+    NodePath.join(
+      NodePath.dirname(fileURLToPath(import.meta.url)),
+      'macos-secure-enclave-list.swift'
+    )
+  ])
+  const parsed = JSON.parse(result.stdout)
+  if (!Array.isArray(parsed)) return []
+  return parsed.flatMap((item): SecureEnclaveIdentity[] => {
+    if (!isRecord(item)) return []
+    if (
+      typeof item.label !== 'string' ||
+      !item.label.startsWith('tempo_wallet_') ||
+      typeof item.hash !== 'string' ||
+      typeof item.publicKey !== 'string' ||
+      !Hex.validate(item.publicKey)
+    )
+      return []
+    const publicKey = normalizeP256PublicKey(item.publicKey)
+    const identity = findSecureEnclaveIdentity(item.label)
+    return [
+      {
+        address: Address.fromPublicKey(PublicKey.from(publicKey)),
+        hash: identity?.hash ?? item.hash,
+        label: item.label,
+        publicKey
+      }
+    ]
+  })
 }
 
 export async function signSecureEnclaveDigest(
@@ -203,6 +289,10 @@ function publicKeyPemToHex(pem: string): Hex.Hex {
   return Hex.fromBytes(
     Uint8Array.from([...Buffer.from(jwk.x, 'base64url'), ...Buffer.from(jwk.y, 'base64url')])
   )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 function normalizeP256PublicKey(publicKey: Hex.Hex) {

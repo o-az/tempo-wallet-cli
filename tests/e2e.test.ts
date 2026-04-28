@@ -101,6 +101,63 @@ test('init refuses to overwrite an existing wallet unless forced', async () => {
   expect(JSON.parse(forced.stdout)).toMatchObject({ wallet_type: 'local' })
 })
 
+test('import private key creates a local wallet and list reports imported wallets', async () => {
+  const result = await runWallet([
+    '--network',
+    'testnet',
+    '-j',
+    'import',
+    '--private-key',
+    privateKey
+  ])
+  const list = await runWallet(['-j', 'list', '--imported'])
+
+  expect(result.exitCode).toBe(0)
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    address: wallet,
+    chain_id: 42431,
+    imported: true,
+    network: 'tempo-moderato',
+    wallet_type: 'local'
+  })
+  expect(JSON.parse(list.stdout)).toMatchObject({
+    wallets: expect.arrayContaining([
+      expect.objectContaining({
+        address: wallet,
+        imported: true,
+        network: 'testnet',
+        wallet_type: 'local'
+      })
+    ])
+  })
+})
+
+test('import address restores a discoverable OS-secret-store wallet', async () => {
+  if (process.platform !== 'darwin') return
+
+  const first = await runWallet([
+    '--network',
+    'testnet',
+    '-j',
+    'import',
+    '--private-key',
+    privateKey
+  ])
+  await NodeFS.rm(keysPath())
+  const second = await runWallet(['--network', 'testnet', '-j', 'import', '--address', wallet])
+
+  expect(first.exitCode).toBe(0)
+  expect(second.exitCode).toBe(0)
+  expect(JSON.parse(second.stdout)).toMatchObject({
+    address: wallet,
+    chain_id: 42431,
+    imported: true,
+    network: 'tempo-moderato',
+    wallet_type: 'local'
+  })
+  expect(await readKeys()).toContain(`wallet_address = "${wallet}"`)
+})
+
 test('whoami works immediately after headless init', async () => {
   const init = await runWallet(['--network', 'testnet', '-j', 'init'])
   const address = (JSON.parse(init.stdout) as { wallet: string }).wallet
