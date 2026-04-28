@@ -19,7 +19,7 @@ type FundOptions = z.infer<typeof fundOptions>
 
 export async function fund(network: Network, globals: GlobalOptions, options: FundOptions) {
   const address = await resolveAddress(network, options.address)
-  const fundUrl = fundingUrl(network, globals)
+  const fundUrl = fundingUrl(network, globals, address)
 
   if ((shouldRenderText(globals) || options.noBrowser) && !globals.silent)
     process.stderr.write(`Fund URL: ${fundUrl}\n`)
@@ -75,10 +75,25 @@ async function resolveAddress(network: Network, input: string | undefined) {
   return normalizeAddress(key.walletAddress)
 }
 
-function fundingUrl(network: Network, globals: GlobalOptions) {
+function fundingUrl(network: Network, globals: GlobalOptions, address: ResolvedToken['address']) {
   const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const url = new URL(authServerUrl)
-  return `${url.origin}/?action=fund`
+  url.pathname = '/remote/rpc/wallet_deposit'
+  url.search = ''
+  url.searchParams.set('jsonrpc', '2.0')
+  url.searchParams.set('id', '1')
+  url.searchParams.set('method', 'wallet_deposit')
+  url.searchParams.set(
+    'params',
+    JSON.stringify([
+      {
+        address,
+        chainId: network.chainId,
+        displayName: 'Tempo CLI'
+      }
+    ])
+  )
+  return url.toString()
 }
 
 async function queryDefaultBalance(network: Network, wallet: ResolvedToken['address']) {

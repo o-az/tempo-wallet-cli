@@ -299,8 +299,13 @@ test('fund prints the auth funding URL and respects explicit address', async () 
   })
 
   expect(result.exitCode).toBe(0)
-  expect(result.stderr).toContain(`Fund URL: ${server.url}/?action=fund`)
-  expect(result.stderr).toContain(`Open this link on your device: ${server.url}/?action=fund`)
+  expect(result.stderr).toContain(`Fund URL: ${server.url}/remote/rpc/wallet_deposit?`)
+  expect(result.stderr).toContain(
+    `Open this link on your device: ${server.url}/remote/rpc/wallet_deposit?`
+  )
+  expect(result.stderr).toContain('method=wallet_deposit')
+  expect(result.stderr).toContain(encodeURIComponent(wallet))
+  expect(result.stderr).toContain('chainId')
 })
 
 test('sessions list and sync report empty local session state', async () => {
