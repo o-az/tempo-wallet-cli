@@ -81,13 +81,23 @@ export function upsertKey(keys: readonly KeyEntry[], entry: KeyEntry) {
 }
 
 export function normalizeAddress(value: string) {
-  if (!isAddress(value)) throw new Error(`Invalid address: ${value}`)
-  return Address.checksum(value as `0x${string}`).toLowerCase()
+  const normalized = normalizeAddressInput(value)
+  if (!isAddress(normalized)) throw new Error(`Invalid address: ${value}`)
+  return Address.checksum(normalized as `0x${string}`).toLowerCase()
 }
 
 function normalizeMaybeAddress(value: string | undefined) {
-  if (!value || !isAddress(value)) return undefined
-  return Address.checksum(value as `0x${string}`).toLowerCase()
+  if (!value) return undefined
+  const normalized = normalizeAddressInput(value)
+  if (!isAddress(normalized)) return undefined
+  return Address.checksum(normalized as `0x${string}`).toLowerCase()
+}
+
+function normalizeAddressInput(value: string) {
+  const trimmed = value.trim()
+  if (!/^tempox/i.test(trimmed)) return trimmed
+  const stripped = trimmed.replace(/^tempox/i, '')
+  return stripped.startsWith('0x') ? stripped : `0x${stripped}`
 }
 
 function primaryKey(keys: readonly KeyEntry[]) {

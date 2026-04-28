@@ -7,9 +7,9 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import {
   keysPath,
   upsertKey,
+  type KeyType,
   loadKeystore,
   saveKeystore,
-  type KeyType,
   type KeyEntry,
   keyForNetwork,
   normalizeAddress,
@@ -18,6 +18,7 @@ import {
   type StoredTokenLimit,
   deletePasskeyWalletAddress
 } from '#keystore.ts'
+import { showWhoami } from '#wallet.ts'
 import type { Network } from '#network.ts'
 import { emit, formatVerificationCode, type GlobalOptions } from '#output.ts'
 
@@ -240,51 +241,6 @@ function parseKeyAuthorization(value: unknown, expectedKeyAddress: string) {
   }
 }
 
-async function showWhoami(network: Network, globals: GlobalOptions) {
-  const keys = await loadKeystore()
-  const key = keyForNetwork(keys, network.chainId)
-  const response = buildWhoamiResponse(network, key)
-
-  if (globals.format !== 'text') return emit(globals.format, response, () => undefined)
-
-  if (!key || !response.wallet) {
-    process.stdout.write('Not logged in. Run `tempo wallet login` to get started.\n')
-    return
-  }
-
-  const lines = [`${'Wallet'.padStart(10)}: ${response.wallet}`]
-  if (response.key) {
-    lines.push('')
-    lines.push(`${'Key'.padStart(10)}: ${response.key.address}`)
-    lines.push(`${'Chain'.padStart(10)}: ${network.name}`)
-    if (response.key.expires_at)
-      lines.push(`${'Expires'.padStart(10)}: ${formatExpiry(key.expiry)}`)
-  }
-  process.stdout.write(`${lines.join('\n')}\n`)
-}
-
-function buildWhoamiResponse(network: Network, key: KeyEntry | undefined) {
-  if (!key)
-    return {
-      ready: false
-    }
-
-  const wallet = normalizeAddress(key.walletAddress)
-  return {
-    ready: Boolean(wallet && (key.key || key.keyAuthorization)),
-    wallet,
-    key: {
-      address: key.keyAddress ? normalizeAddress(key.keyAddress) : 'none',
-      chain_id: network.chainId,
-      expires_at:
-        key.expiry && key.expiry > 0 ? new Date(key.expiry * 1000).toISOString() : undefined,
-      network: network.name,
-      symbol: key.limits.length > 0 ? network.token.symbol : undefined,
-      token: key.limits.length > 0 ? network.token.address : undefined
-    }
-  }
-}
-
 function ensureRefreshSupported(keys: readonly KeyEntry[], network: Network) {
   const key = keyForNetwork(keys, network.chainId)
   if (!key || key.walletType === 'passkey') return
@@ -387,16 +343,4 @@ function confirm(message: string) {
 
 function shortAddress(address: string) {
   return address.length > 10 ? `${address.slice(0, 6)}...${address.slice(-4)}` : address
-}
-
-function formatExpiry(expiry: number | undefined) {
-  if (!expiry) return undefined
-  const remaining = expiry - Math.floor(Date.now() / 1000)
-  if (remaining <= 0) return 'expired'
-  const days = Math.floor(remaining / 86400)
-  const hours = Math.floor((remaining % 86400) / 3600)
-  const minutes = Math.floor((remaining % 3600) / 60)
-  if (days > 0) return `${days}d ${hours}h`
-  if (hours > 0) return `${hours}h ${minutes}m`
-  return `${minutes}m`
 }

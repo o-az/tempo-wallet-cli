@@ -3,6 +3,7 @@ import { Cli, z } from 'incur'
 import { resolveNetwork } from '#network.ts'
 import type { GlobalOptions } from '#output.ts'
 import { login, logout, refresh } from '#auth.ts'
+import { keys, transfer, whoami } from '#wallet.ts'
 
 const cli = Cli.create('wallet', {
   description: 'Wallet identity and custody operations',
@@ -39,6 +40,45 @@ cli.command('logout', {
     const globals = getGlobals()
     resolveNetwork(globals.network)
     await logout(globals, { yes: c.options.yes ?? false })
+  }
+})
+
+cli.command('whoami', {
+  description: 'Show who you are: wallet, balances, keys',
+  async run() {
+    const globals = getGlobals()
+    await whoami(resolveNetwork(globals.network), globals)
+  }
+})
+
+cli.command('keys', {
+  description: 'List keys and their spending limits',
+  async run() {
+    const globals = getGlobals()
+    await keys(resolveNetwork(globals.network), globals)
+  }
+})
+
+cli.command('transfer', {
+  description: 'Transfer tokens to an address',
+  args: z.object({
+    amount: z.string().describe('Amount in human units ("1.00", "50")'),
+    token: z.string().describe('Token contract address (0x...)'),
+    to: z.string().describe('Recipient address (0x...)')
+  }),
+  options: z.object({
+    dryRun: z.boolean().optional().describe("Show plan + fee estimate, don't send"),
+    feeToken: z.string().optional().describe('Pay fees in a different token (default: same token)')
+  }),
+  async run(c) {
+    const globals = getGlobals()
+    await transfer(resolveNetwork(globals.network), globals, {
+      amount: c.args.amount,
+      dryRun: c.options.dryRun ?? false,
+      feeToken: c.options.feeToken,
+      to: c.args.to,
+      token: c.args.token
+    })
   }
 })
 
@@ -95,6 +135,18 @@ function parseGlobalOptions(argv: string[]) {
     }
     if (token === '--no-browser') {
       next.push('--noBrowser')
+      continue
+    }
+    if (token === '--dry-run') {
+      next.push('--dryRun')
+      continue
+    }
+    if (token === '--fee-token') {
+      next.push('--feeToken')
+      continue
+    }
+    if (token.startsWith('--fee-token=')) {
+      next.push(`--feeToken=${token.slice('--fee-token='.length)}`)
       continue
     }
     next.push(token)
