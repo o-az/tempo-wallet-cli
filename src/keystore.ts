@@ -4,7 +4,6 @@ import * as toml from '@std/toml'
 import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
 import * as NodeFS from 'node:fs/promises'
-import type { SignatureEnvelope } from 'ox/tempo'
 
 const keyTypeSchema = z.enum(['secp256k1', 'p256', 'webauthn'])
 const walletTypeSchema = z.enum(['local', 'passkey'])
@@ -14,7 +13,7 @@ const addressSchema = z.custom<Address.Address>(
 )
 const hexSchema = z.custom<Hex.Hex>(value => typeof value === 'string' && Hex.validate(value))
 
-export type KeyType = z.infer<typeof keyTypeSchema>  
+export type KeyType = z.infer<typeof keyTypeSchema>
 export type WalletType = z.infer<typeof walletTypeSchema>
 
 export type StoredTokenLimit = {
