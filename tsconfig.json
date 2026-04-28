@@ -38,7 +38,8 @@
     ]
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
+    "tests/**/*"
   ],
   "files": [
     "env.d.ts",

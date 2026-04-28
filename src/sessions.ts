@@ -1,9 +1,9 @@
 import { z } from 'incur'
 import * as NodePath from 'node:path'
-import * as BunSqlite from 'bun:sqlite'
+import * as NodeSqlite from 'node:sqlite'
 
-import { formatUnits } from '#wallet.ts'
 import type { Network } from '#network.ts'
+import { formatUnits } from '#wallet.ts'
 import { hasWallet, keysPath, loadKeystore } from '#keystore.ts'
 import { shouldRenderText, type GlobalOptions } from '#output.ts'
 
@@ -141,16 +141,16 @@ export async function closeSessions(
 
 function loadChannelRecords(): ChannelRecord[] {
   try {
-    const db = new BunSqlite.Database(channelDbPath(), { create: false, readonly: true })
+    const db = new NodeSqlite.DatabaseSync(channelDbPath(), { readOnly: true })
     try {
       return db
-        .query<ChannelRecord, []>(`
+        .prepare(`
         SELECT channel_id, chain_id, origin, deposit, cumulative_amount, accepted_cumulative,
                state, close_requested_at, grace_ready_at, created_at, last_used_at
         FROM channels
         ORDER BY last_used_at DESC
       `)
-        .all()
+        .all() as ChannelRecord[]
     } finally {
       db.close()
     }
@@ -277,9 +277,9 @@ function channelDbPath() {
 
 function deleteChannels(channelIds: string[]) {
   if (channelIds.length === 0) return
-  const db = new BunSqlite.Database(channelDbPath())
+  const db = new NodeSqlite.DatabaseSync(channelDbPath())
   try {
-    const deleteChannel = db.query('DELETE FROM channels WHERE LOWER(channel_id) = LOWER(?)')
+    const deleteChannel = db.prepare('DELETE FROM channels WHERE LOWER(channel_id) = LOWER(?)')
     for (const channelId of channelIds) deleteChannel.run(channelId)
   } finally {
     db.close()

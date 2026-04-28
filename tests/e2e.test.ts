@@ -1,16 +1,22 @@
-/// <reference types="bun" />
+/// <reference types="node" />
 
 import * as NodeOS from 'node:os'
 import * as NodePath from 'node:path'
-import * as BunSqlite from 'bun:sqlite'
+import * as NodeHTTP from 'node:http'
 import * as NodeFS from 'node:fs/promises'
+import * as NodeChildProcess from 'node:child_process'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 
 import { saveKeystore, type KeyEntry } from '#keystore.ts'
 
 type MockAuthServer = {
-  close: () => void
+  close: () => Promise<void>
   pollCount: () => number
+  url: string
+}
+
+type MockServer = {
+  close: () => Promise<void>
   url: string
 }
 
@@ -23,15 +29,15 @@ let server: MockAuthServer
 let tempoHome: string
 
 beforeEach(async () => {
-  server = startAuthServer()
+  server = await startAuthServer()
   tempoHome = NodePath.join(
     await NodeFS.mkdtemp(NodePath.join(NodeOS.tmpdir(), 'wallet-ts-')),
     '.tempo'
   )
 })
 
-afterEach(() => {
-  server.close()
+afterEach(async () => {
+  await server.close()
 })
 
 test('login persists a Rust-compatible passkey entry', async () => {
@@ -246,7 +252,7 @@ test('sessions close dry-run and local close report selected channels', async ()
 })
 
 test('services list, search, and detail use the service directory', async () => {
-  const services = startServicesServer()
+  const services = await startServicesServer()
   try {
     const env = { TEMPO_SERVICES_URL: `${services.url}/services` }
     const list = await runWallet(['-j', 'services', 'list'], env)
@@ -265,7 +271,7 @@ test('services list, search, and detail use the service directory', async () => 
       name: 'OpenAI'
     })
   } finally {
-    void services.close()
+    await services.close()
   }
 })
 
@@ -302,7 +308,7 @@ test('silent suppresses non-essential fund progress output', async () => {
 })
 
 async function runWallet(args: readonly string[], env: Record<string, string> = {}) {
-  const proc = Bun.spawn(['bun', './src/index.ts', ...args], {
+  return await runProcess('node', ['./src/index.ts', ...args], {
     cwd: new URL('..', import.meta.url).pathname,
     env: {
       ...process.env,
@@ -311,16 +317,8 @@ async function runWallet(args: readonly string[], env: Record<string, string> = 
       TEMPO_WALLET_DISABLE_BROWSER_OPEN: '1',
       TEMPO_WALLET_POLL_INTERVAL_MS: '1',
       ...env
-    },
-    stderr: 'pipe',
-    stdout: 'pipe'
+    }
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited
-  ])
-  return { exitCode, stderr, stdout }
 }
 
 async function readKeys() {
@@ -347,99 +345,118 @@ function keysPath() {
 async function seedSession() {
   const path = NodePath.join(tempoHome, 'wallet', 'channels.db')
   await NodeFS.mkdir(NodePath.dirname(path), { recursive: true })
-  const db = new BunSqlite.Database(path)
-  try {
-    db.exec(`
-      CREATE TABLE channels (
-        channel_id TEXT PRIMARY KEY,
-        version INTEGER NOT NULL DEFAULT 1,
-        origin TEXT NOT NULL,
-        request_url TEXT NOT NULL DEFAULT '',
-        chain_id INTEGER NOT NULL,
-        escrow_contract TEXT NOT NULL,
-        token TEXT NOT NULL,
-        payee TEXT NOT NULL,
-        payer TEXT NOT NULL,
-        authorized_signer TEXT NOT NULL,
-        salt TEXT NOT NULL,
-        deposit TEXT NOT NULL,
-        cumulative_amount TEXT NOT NULL,
-        challenge_echo TEXT NOT NULL,
-        state TEXT NOT NULL DEFAULT 'active',
-        close_requested_at INTEGER NOT NULL DEFAULT 0,
-        grace_ready_at INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        last_used_at INTEGER NOT NULL,
-        accepted_cumulative TEXT NOT NULL DEFAULT '0',
-        server_spent TEXT NOT NULL DEFAULT '0'
-      )
-    `)
-    db.query(`
-      INSERT INTO channels (
-        channel_id, origin, request_url, chain_id, escrow_contract, token, payee, payer,
-        authorized_signer, salt, deposit, cumulative_amount, accepted_cumulative,
-        challenge_echo, state, created_at, last_used_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      '0x1234',
-      'https://api.example.com',
-      'https://api.example.com/v1',
-      42431,
-      '0x0000000000000000000000000000000000000000',
-      testnetToken,
-      wallet,
-      wallet,
-      wallet,
-      '0x00',
-      '2000000',
-      '500000',
-      '500000',
-      '{}',
-      'active',
-      1_700_000_000,
-      1_700_000_100
+  const createSql = `
+    CREATE TABLE channels (
+      channel_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL DEFAULT 1,
+      origin TEXT NOT NULL,
+      request_url TEXT NOT NULL DEFAULT '',
+      chain_id INTEGER NOT NULL,
+      escrow_contract TEXT NOT NULL,
+      token TEXT NOT NULL,
+      payee TEXT NOT NULL,
+      payer TEXT NOT NULL,
+      authorized_signer TEXT NOT NULL,
+      salt TEXT NOT NULL,
+      deposit TEXT NOT NULL,
+      cumulative_amount TEXT NOT NULL,
+      challenge_echo TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'active',
+      close_requested_at INTEGER NOT NULL DEFAULT 0,
+      grace_ready_at INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL,
+      accepted_cumulative TEXT NOT NULL DEFAULT '0',
+      server_spent TEXT NOT NULL DEFAULT '0'
     )
-  } finally {
-    db.close()
-  }
+  `
+  const insertSql = `
+    INSERT INTO channels (
+      channel_id, origin, request_url, chain_id, escrow_contract, token, payee, payer,
+      authorized_signer, salt, deposit, cumulative_amount, accepted_cumulative,
+      challenge_echo, state, created_at, last_used_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `
+  const insertValues = [
+    '0x1234',
+    'https://api.example.com',
+    'https://api.example.com/v1',
+    42431,
+    '0x0000000000000000000000000000000000000000',
+    testnetToken,
+    wallet,
+    wallet,
+    wallet,
+    '0x00',
+    '2000000',
+    '500000',
+    '500000',
+    '{}',
+    'active',
+    1_700_000_000,
+    1_700_000_100
+  ]
+  const script = [
+    "import * as NodeSqlite from 'node:sqlite'",
+    'const db = new NodeSqlite.DatabaseSync(process.env.CHANNEL_DB_PATH)',
+    'try {',
+    `db.exec(${JSON.stringify(createSql)})`,
+    `db.prepare(${JSON.stringify(insertSql)}).run(...${JSON.stringify(insertValues)})`,
+    '} finally {',
+    '  db.close()',
+    '}'
+  ].join('\n')
+  const { exitCode, stderr } = await runProcess('node', ['--input-type=module', '-e', script], {
+    env: { ...process.env, CHANNEL_DB_PATH: path }
+  })
+  if (exitCode !== 0) throw new Error(stderr)
 }
 
-function startAuthServer(): MockAuthServer {
+async function startAuthServer(): Promise<MockAuthServer> {
   let polls = 0
-  const server = Bun.serve({
-    fetch(request: Request) {
-      const url = new URL(request.url)
-      if (request.method === 'POST' && url.pathname === '/cli-auth/device-code')
-        return Response.json({ code: 'ABCDEFGH' })
+  const server = NodeHTTP.createServer(
+    (request: NodeHTTP.IncomingMessage, response: NodeHTTP.ServerResponse) => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      if (request.method === 'POST' && url.pathname === '/cli-auth/device-code') {
+        sendJson(response, { code: 'ABCDEFGH' })
+        return
+      }
 
       if (request.method === 'POST' && url.pathname === '/cli-auth/poll/ABCDEFGH') {
         polls += 1
-        if (polls % 2 === 1) return Response.json({ status: 'pending' })
-        return Response.json({
+        if (polls % 2 === 1) {
+          sendJson(response, { status: 'pending' })
+          return
+        }
+        sendJson(response, {
           account_address: wallet,
           key_authorization: null,
           status: 'authorized'
         })
+        return
       }
 
-      return new Response('not found', { status: 404 })
-    },
-    port: 0
-  })
+      sendText(response, 'not found', 404)
+    }
+  )
+  const url = await listen(server)
 
   return {
-    close: () => server.stop(true),
+    close: () => closeServer(server),
     pollCount: () => polls,
-    url: `http://${server.hostname}:${server.port}`
+    url
   }
 }
 
-function startServicesServer() {
-  const server = Bun.serve({
-    fetch(request: Request) {
-      const url = new URL(request.url)
-      if (url.pathname !== '/services') return new Response('not found', { status: 404 })
-      return Response.json({
+async function startServicesServer(): Promise<MockServer> {
+  const server = NodeHTTP.createServer(
+    (request: NodeHTTP.IncomingMessage, response: NodeHTTP.ServerResponse) => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      if (url.pathname !== '/services') {
+        sendText(response, 'not found', 404)
+        return
+      }
+      sendJson(response, {
         services: [
           {
             categories: ['ai'],
@@ -469,12 +486,61 @@ function startServicesServer() {
           }
         ]
       })
-    },
-    port: 0
-  })
+    }
+  )
+  const url = await listen(server)
 
   return {
-    close: () => server.stop(true),
-    url: `http://${server.hostname}:${server.port}`
+    close: () => closeServer(server),
+    url
   }
+}
+
+async function runProcess(
+  command: string,
+  args: readonly string[],
+  options: NodeChildProcess.SpawnOptions
+) {
+  const proc = NodeChildProcess.spawn(command, args, {
+    ...options,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    readStream(proc.stdout),
+    readStream(proc.stderr),
+    new Promise<number>(resolve => {
+      proc.on('close', (code: number | null) => resolve(code ?? 1))
+    })
+  ])
+  return { exitCode, stderr, stdout }
+}
+
+async function readStream(stream: NodeJS.ReadableStream | null) {
+  if (!stream) return ''
+  let result = ''
+  for await (const chunk of stream) result += String(chunk)
+  return result
+}
+
+async function listen(server: NodeHTTP.Server) {
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('HTTP server did not bind to a port')
+  return `http://127.0.0.1:${address.port}`
+}
+
+async function closeServer(server: NodeHTTP.Server) {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => (error ? reject(error) : resolve()))
+  })
+}
+
+function sendJson(response: NodeHTTP.ServerResponse, body: unknown) {
+  response.writeHead(200, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(body))
+}
+
+function sendText(response: NodeHTTP.ServerResponse, body: string, status: number) {
+  response.writeHead(status, { 'content-type': 'text/plain' })
+  response.end(body)
 }
