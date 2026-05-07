@@ -15,7 +15,7 @@ export type Network = {
 
 export const networks = {
   tempo: {
-    authUrl: 'https://wallet-next.tempo.xyz/api/auth/cli',
+    authUrl: 'https://wallet.tempo.xyz/api/auth/cli',
     chainId: 4217,
     explorerUrl: 'https://explore.tempo.xyz',
     name: 'tempo',
@@ -27,7 +27,7 @@ export const networks = {
     }
   },
   'tempo-moderato': {
-    authUrl: 'https://wallet-next.moderato.tempo.xyz/api/auth/cli',
+    authUrl: 'https://wallet.tempo.xyz/api/auth/cli?testnet=true',
     chainId: 42431,
     explorerUrl: 'https://explore.moderato.tempo.xyz',
     name: 'tempo-moderato',

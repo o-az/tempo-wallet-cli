@@ -78,8 +78,8 @@ async function resolveAddress(network: Network, input: string | undefined) {
 function fundingUrl(network: Network, globals: GlobalOptions, address: ResolvedToken['address']) {
   const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const url = new URL(authServerUrl)
-  if (!globals.env.TEMPO_AUTH_URL && url.hostname === 'wallet-next.moderato.tempo.xyz')
-    url.hostname = 'wallet-next.tempo.xyz'
+  if (!globals.env.TEMPO_AUTH_URL && url.hostname === 'wallet.tempo.xyz?testnet=true')
+    url.hostname = 'wallet.tempo.xyz'
 
   url.pathname = '/remote/rpc/wallet_deposit'
   url.search = ''

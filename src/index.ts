@@ -14,17 +14,17 @@ import { fund, fundOptions } from '#fund.ts'
 import { resolveNetwork } from '#network.ts'
 import { services, servicesArgs, servicesOptions } from '#services.ts'
 import {
-  importOptions,
-  importWallet,
   init,
   login,
+  logout,
+  refresh,
   initOptions,
   listOptions,
   listWallets,
-  logout,
-  refresh,
-  logoutOptions,
-  loginOptions
+  loginOptions,
+  importWallet,
+  importOptions,
+  logoutOptions
 } from '#auth.ts'
 import { envSchema, globalOptionsSchema, type GlobalOptions } from '#output.ts'
 import {
