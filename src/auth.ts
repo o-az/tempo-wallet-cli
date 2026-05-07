@@ -553,7 +553,7 @@ async function doLogin(
   network: Network,
   globals: GlobalOptions,
   noBrowser: boolean,
-  localRoot?: KeyEntry  
+  localRoot?: KeyEntry
 ) {
   const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const authBaseUrl = resolveAuthBaseUrl(authServerUrl)
@@ -653,7 +653,7 @@ async function saveLoginKey(
   callback: { accountAddress: string; keyAuthorization: unknown },
   privateKey: Hex.Hex | undefined,
   keyAddress: string,
-  localRoot?: KeyEntry  
+  localRoot?: KeyEntry
 ) {
   const walletAddress = normalizeAddress(callback.accountAddress)
   const parsed = parseKeyAuthorization(callback.keyAuthorization, keyAddress)
