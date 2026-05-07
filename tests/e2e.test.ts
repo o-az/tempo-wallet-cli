@@ -89,6 +89,31 @@ test('init creates a local wallet without browser auth', async () => {
   expect(keys).toContain('key_type = "secp256k1"')
 })
 
+test('login --link-local authorizes an existing headless wallet with web auth', async () => {
+  const init = await runWallet(['--network', 'testnet', '-j', 'init'])
+  const localWallet = JSON.parse(init.stdout) as { wallet: string }
+  const login = await runWallet([
+    '--network',
+    'testnet',
+    '-j',
+    'login',
+    '--link-local',
+    '--no-browser'
+  ])
+
+  expect(login.exitCode).toBe(0)
+  expect(server.pollCount()).toBe(2)
+  const body = JSON.parse(login.stdout) as { wallet: string; key: { address: string } }
+  expect(body.wallet).toBe(wallet)
+  expect(body.key.address).toBe(localWallet.wallet)
+
+  const keys = await readKeys()
+  expect(keys).toContain('wallet_type = "local"')
+  expect(keys).toContain('wallet_type = "passkey"')
+  expect(keys).toContain(`key_address = "${localWallet.wallet}"`)
+  expect(keys).toContain(`wallet_address = "${wallet}"`)
+})
+
 test('init refuses to overwrite an existing wallet unless forced', async () => {
   const first = await runWallet(['--network', 'testnet', '-j', 'init'])
   const second = await runWallet(['--network', 'testnet', 'init'])

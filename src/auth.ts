@@ -38,6 +38,10 @@ import { shouldRenderText, formatVerificationCode, type GlobalOptions } from '#o
 const callbackTimeoutMs = 15 * 60 * 1_000
 
 export const loginOptions = z.object({
+  linkLocal: z
+    .boolean()
+    .optional()
+    .describe('Authorize the existing local root as an access key for a WebAuthn wallet'),
   noBrowser: z.boolean().optional().describe('Do not attempt to open a browser')
 })
 
@@ -86,7 +90,11 @@ type WalletListItem = {
 }
 
 export async function login(network: Network, globals: GlobalOptions, options: LoginOptions) {
-  return await loginImpl(network, globals, { forceReauth: false, noBrowser: options.noBrowser })
+  return await loginImpl(network, globals, {
+    forceReauth: false,
+    linkLocal: options.linkLocal ?? false,
+    noBrowser: options.noBrowser
+  })
 }
 
 export async function init(network: Network, globals: GlobalOptions, options: InitOptions) {
@@ -504,7 +512,8 @@ async function loginImpl(
   options: LoginOptions & { forceReauth: boolean }
 ) {
   const keys = await loadKeystore()
-  const alreadyLoggedIn = hasKeyForNetwork(keys, network.chainId)
+  const localRoot = options.linkLocal ? findLinkableLocalRoot(keys, network) : undefined
+  const alreadyLoggedIn = localRoot ? false : hasKeyForNetwork(keys, network.chainId)
 
   if (options.forceReauth && alreadyLoggedIn) ensureRefreshSupported(keys, network)
 
@@ -520,7 +529,7 @@ async function loginImpl(
 
   if (!alreadyLoggedIn || options.forceReauth) {
     try {
-      await doLogin(network, globals, options.noBrowser ?? false)
+      await doLogin(network, globals, options.noBrowser ?? false, localRoot)
     } catch (error) {
       if (staleBackup) {
         await saveKeystore(staleBackup)
@@ -540,13 +549,20 @@ async function loginImpl(
   return await showWhoami(network, globals)
 }
 
-async function doLogin(network: Network, globals: GlobalOptions, noBrowser: boolean) {
+async function doLogin(
+  network: Network,
+  globals: GlobalOptions,
+  noBrowser: boolean,
+  localRoot?: KeyEntry  
+) {
   const authServerUrl = globals.env.TEMPO_AUTH_URL ?? network.authUrl
   const authBaseUrl = resolveAuthBaseUrl(authServerUrl)
   const authUrl = new URL(authBaseUrl)
 
-  const privateKey = generatePrivateKey()
-  const account = privateKeyToAccount(privateKey)
+  const privateKey = localRoot ? undefined : generatePrivateKey()
+  const account = localRoot
+    ? await accountForLocalRoot(localRoot)
+    : privateKeyToAccount(privateKey!)
   const { verifier, challenge } = createPkcePair()
 
   const code = await createDeviceCode(authBaseUrl, account.publicKey, challenge, network)
@@ -562,7 +578,7 @@ async function doLogin(network: Network, globals: GlobalOptions, noBrowser: bool
   if (opened === 'failed') process.stderr.write(`Open this URL manually: ${url}\n`)
 
   const callback = await pollUntilAuthorized(authBaseUrl, displayCode, verifier, globals)
-  await saveLoginKey(network, callback, privateKey, account.address)
+  await saveLoginKey(network, callback, privateKey, account.address, localRoot)
 }
 
 async function createDeviceCode(
@@ -635,24 +651,55 @@ async function pollUntilAuthorized(
 async function saveLoginKey(
   network: Network,
   callback: { accountAddress: string; keyAuthorization: unknown },
-  privateKey: Hex.Hex,
-  keyAddress: string
+  privateKey: Hex.Hex | undefined,
+  keyAddress: string,
+  localRoot?: KeyEntry  
 ) {
   const walletAddress = normalizeAddress(callback.accountAddress)
   const parsed = parseKeyAuthorization(callback.keyAuthorization, keyAddress)
   const entry: KeyEntry = {
     chainId: parsed?.chainId && parsed.chainId !== 0 ? parsed.chainId : network.chainId,
     ...(typeof parsed?.expiry === 'number' ? { expiry: parsed.expiry } : {}),
-    key: privateKey,
+    ...(privateKey ? { key: privateKey } : {}),
+    ...(localRoot?.key ? { key: localRoot.key } : {}),
+    ...(localRoot?.keyReference ? { keyReference: localRoot.keyReference } : {}),
     keyAddress: normalizeAddress(keyAddress),
     ...(parsed?.hex ? { keyAuthorization: parsed.hex } : {}),
-    keyType: parsed?.keyType ?? 'secp256k1',
+    keyType: parsed?.keyType ?? localRoot?.keyType ?? 'secp256k1',
     limits: parsed?.limits ?? [],
     walletAddress,
     walletType: 'passkey'
   }
 
   await saveKeystore(upsertKey(await loadKeystore(), entry), keysPath())
+}
+
+async function accountForLocalRoot(root: KeyEntry) {
+  if (root.keyType !== 'secp256k1')
+    throw new Error('Linking a local wallet to WebAuthn currently requires a secp256k1 local root.')
+  const privateKey = (root.key ??
+    (root.keyReference ? await loadKeychainSecret(root.keyReference) : undefined)) as
+    | Hex.Hex
+    | undefined
+  if (!privateKey)
+    throw new Error(
+      'Linking a local wallet to WebAuthn currently requires an exportable local root key.'
+    )
+  return Account.fromSecp256k1(privateKey)
+}
+
+function findLinkableLocalRoot(keys: readonly KeyEntry[], network: Network) {
+  const root = keys.find(key => {
+    if (key.chainId !== network.chainId || key.walletType !== 'local') return false
+    const wallet = normalizeAddress(key.walletAddress)
+    const keyAddress = key.keyAddress ? normalizeAddress(key.keyAddress) : undefined
+    return Boolean(keyAddress && wallet === keyAddress && (key.key || key.keyReference))
+  })
+  if (!root)
+    throw new Error(
+      `No exportable local root wallet found for '${network.name}'. Run 'tempo wallet init' first.`
+    )
+  return root
 }
 
 function parseKeyAuthorization(value: unknown, expectedKeyAddress: string) {
