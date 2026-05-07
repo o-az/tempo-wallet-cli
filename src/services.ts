@@ -18,7 +18,7 @@ const endpointSchema = z.object({
   method: z.string(),
   path: z.string(),
   description: z.string().optional(),
-  payment: endpointPaymentSchema.optional(),
+  payment: endpointPaymentSchema.nullish(),
   docs: z.string().optional()
 })
 
@@ -211,7 +211,7 @@ function field(label: string, value: string) {
   return `${label.padStart(14)}: ${value}`
 }
 
-function formatPricing(payment: EndpointPayment | undefined) {
+function formatPricing(payment: EndpointPayment | null | undefined) {
   if (!payment) return 'free'
   if (payment.dynamic) return `dynamic ${payment.intent}`
   if (payment.amount) return `${formatAmount(payment.amount, payment.decimals)} ${payment.intent}`
