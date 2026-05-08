@@ -3,14 +3,14 @@
   "version": "0.0.0",
   "license": "MIT",
   "type": "module",
-  "bin": "dist/index.js",
+  "bin": "dist/index.mjs",
   "imports": {
     "#*": "./src/*",
     "#package.json": "./package.json"
   },
   "scripts": {
     "dev": "node ./src/index.ts",
-    "build": "bun build src/index.ts --outfile dist/index.js --packages external --target node",
+    "build": "bun x tsdown",
     "test": "vitest --run",
     "format": "oxfmt --config='oxfmt.config.ts' --write",
     "lint": "oxlint --config='oxlint.config.ts' --type-aware --type-check --fix-dangerously",
