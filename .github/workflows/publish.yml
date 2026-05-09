@@ -1,0 +1,51 @@
+name: Publish
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_ENV: 'production'
+  NODE_OPTIONS: '--disable-warning=ExperimentalWarning --disable-warning=DeprecationWarning'
+
+jobs:
+  deploy:
+    name: 'Publish'
+    timeout-minutes: 3
+    runs-on: ['ubuntu-latest']
+    steps:
+      - name: '🔑 Checkout'
+        uses: actions/checkout@v6
+
+      - name: 'Setup Node.js'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'latest'
+
+      - name: '🐰 Setup Bun'
+        uses: oven-sh/setup-bun@main
+        with:
+          bun-version: latest
+
+      - name: 'Install Dependencies'
+        run: bun install --frozen-lockfile
+
+      - name: 'Build'
+        run: |
+          bun run build
+          cp ./src/macos-secure-enclave-list.swift ./dist/macos-secure-enclave-list.swift
+          cp ./src/macos-secure-enclave-sign.swift ./dist/macos-secure-enclave-sign.swift
+
+      - name: 'pkg.pr.new'
+        run: bun x pkg-pr-new@latest publish --commentWithSha --bin

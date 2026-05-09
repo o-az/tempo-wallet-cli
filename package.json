@@ -3,15 +3,14 @@
   "version": "0.0.0",
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "tempo": "./src/index.ts"
-  },
+  "bin": "dist/index.mjs",
   "imports": {
     "#*": "./src/*",
     "#package.json": "./package.json"
   },
   "scripts": {
     "dev": "node ./src/index.ts",
+    "build": "bun x tsdown",
     "test": "vitest --run",
     "format": "oxfmt --config='oxfmt.config.ts' --write",
     "lint": "oxlint --config='oxlint.config.ts' --type-aware --type-check --fix-dangerously",
@@ -31,7 +30,6 @@
     "wagmi": "^3.6.5"
   },
   "devDependencies": {
-    "zod": "^4.3.6",
     "@cloudflare/vite-plugin": "^1.33.2",
     "@total-typescript/ts-reset": "^0.6.1",
     "@types/bun": "^1.3.13",
@@ -42,10 +40,11 @@
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
     "oxlint-tsgolint": "^0.22.1",
+    "pkg-pr-new": "^0.0.71",
     "simple-git-hooks": "^2.13.1",
     "typescript": "^6.0.3",
     "vite": "^8.0.10",
-    "vitest": "^4.1.5"
-  },
-  "packageManager": "bun@1.3.13"
+    "vitest": "^4.1.5",
+    "zod": "^4.3.6"
+  }
 }
